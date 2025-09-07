@@ -335,58 +335,114 @@ class TexasHoldEm:
         """Interactive betting round"""
         first_to_act = (self.dealer_position + 3) % len(self.players) if street_idx == 0 else (self.dealer_position + 1) % len(self.players)
         current = first_to_act
-        players_acted = set()
+        last_raiser = None  # Track who made the last raise
         
-        for _ in range(len(self.players) * 3):
+        # Track who has acted since the last raise
+        players_to_act = set(p for p in self.players if not p.folded and not p.all_in and p.chips > 0)
+        
+        max_iterations = len(self.players) * 4  # Safety limit
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
             player = self.players[current]
             
+            # Skip players who can't act
             if player.folded or player.all_in or player.chips == 0:
                 current = (current + 1) % len(self.players)
-                if current == first_to_act:
-                    break
                 continue
             
-            if player.current_bet >= self.current_bet and player in players_acted:
+            # Check if this player needs to act
+            needs_to_act = False
+            if player.current_bet < self.current_bet:
+                # Player hasn't matched the current bet
+                needs_to_act = True
+            elif last_raiser is None and player in players_to_act:
+                # No raises yet, player hasn't acted
+                needs_to_act = True
+            elif last_raiser and player != last_raiser and player in players_to_act:
+                # There was a raise and this player hasn't responded to it
+                needs_to_act = True
+            
+            if not needs_to_act:
                 current = (current + 1) % len(self.players)
-                if current == first_to_act:
+                # Check if we've gone full circle back to the last raiser
+                if last_raiser and current == self.players.index(last_raiser):
                     break
+                # Check if everyone has matched the bet
+                active = [p for p in self.players if not p.folded and not p.all_in and p.chips > 0]
+                if all(p.current_bet == self.current_bet for p in active):
+                    # Check if we've returned to first to act with no raises
+                    if current == first_to_act and last_raiser is None:
+                        break
                 continue
             
             # Get valid actions
             valid_actions = self.get_valid_actions(player)
             
-            # Get action
-            if player.is_ai and player.ai_model:
-                state = player.ai_model.get_state_features(
-                    player.hand, self.community_cards, self.pot, self.current_bet,
-                    player.chips, player.current_bet, self.num_players,
-                    sum(1 for p in self.players if not p.folded),
-                    current, self.action_history[-10:], self.opponent_bets[-10:],
-                    hand_phase=street_idx
-                )
-                action = player.ai_model.choose_action(state, valid_actions, training=False)
-            elif player.is_ai:
-                action = random.choice(valid_actions)
+            # Get action based on player type
+            if player.is_ai:
+                if player.ai_model:
+                    # AI with trained model
+                    state = player.ai_model.get_state_features(
+                        player.hand, self.community_cards, self.pot, self.current_bet,
+                        player.chips, player.current_bet, self.num_players,
+                        sum(1 for p in self.players if not p.folded),
+                        current, self.action_history[-10:], self.opponent_bets[-10:],
+                        hand_phase=street_idx
+                    )
+                    action = player.ai_model.choose_action(state, valid_actions, training=False)
+                    # Store current street for execute_action
+                    self.current_street = street_idx
+                else:
+                    # Random AI (no model)
+                    action = random.choice(valid_actions)
             else:
+                # Human player
                 action = self.get_human_action(player, valid_actions)
             
             # Execute action
+            old_bet = self.current_bet
             self.execute_action(player, action, verbose)
             self.action_history.append(action)
-            players_acted.add(player)
             
-            if action == Action.RAISE:
-                players_acted = {player}
+            # Remove player from players_to_act since they've acted
+            players_to_act.discard(player)
+            
+            # Handle raise/all-in
+            if action in [Action.RAISE, Action.ALL_IN] and self.current_bet > old_bet:
+                # This was a raise - everyone else needs to act again
+                last_raiser = player
+                players_to_act = set(p for p in self.players 
+                                    if not p.folded and not p.all_in and p.chips > 0 and p != player)
             
             # Check end conditions
-            active = [p for p in self.players if not p.folded and not p.all_in and p.chips > 0]
-            if len(active) <= 1 or sum(1 for p in self.players if not p.folded) <= 1:
+            active = [p for p in self.players if not p.folded]
+            if len(active) <= 1:
                 break
             
+            # Check if only all-in players remain (plus maybe one active)
+            active_with_chips = [p for p in active if not p.all_in and p.chips > 0]
+            if len(active_with_chips) <= 1:
+                # If there's one player with chips and others are all-in, they need to match
+                if len(active_with_chips) == 1:
+                    remaining_player = active_with_chips[0]
+                    if remaining_player.current_bet >= self.current_bet:
+                        # They've matched, we're done
+                        break
+                    # Otherwise, continue so they can act
+                else:
+                    # Everyone is all-in
+                    break
+            
+            # Move to next player
             current = (current + 1) % len(self.players)
             
-            if all(p in players_acted for p in active):
-                if all(p.current_bet == self.current_bet for p in active):
+            # Check if betting is complete
+            if not players_to_act:
+                # Everyone has acted since the last raise
+                active_not_allin = [p for p in self.players if not p.folded and not p.all_in and p.chips > 0]
+                if all(p.current_bet == self.current_bet for p in active_not_allin):
                     break
         
         # Reset current bets for next street
@@ -429,7 +485,8 @@ class TexasHoldEm:
             if verbose:
                 print(f"{player.name} checks")
         elif action == Action.CALL:
-            amount = player.bet(self.current_bet - player.current_bet)
+            call_amount = self.current_bet - player.current_bet
+            amount = player.bet(call_amount)
             self.pot += amount
             self.opponent_bets.append(amount)
             if verbose:
@@ -451,24 +508,35 @@ class TexasHoldEm:
                 else:
                     min_raise = self.big_blind
                 
-                # Different raise strategies (including minimum raise)
-                strategies = [
-                    min_raise,        # Minimum raise
-                    pot_size * 0.33,  # One-third pot
-                    pot_size * 0.5,   # Half pot
-                    pot_size * 0.75,  # Three-quarters pot
-                    pot_size,         # Pot-sized bet
-                    pot_size * 1.5,   # Overbet (rare)
-                ]
-                
-                # Weight the strategies (prefer reasonable sizes)
-                weights = [0.15, 0.20, 0.25, 0.20, 0.15, 0.05]
-                strategic_amount = random.choices(strategies, weights=weights)[0]
-                
-                # Apply constraints
-                max_raise = player.chips - call_amount
-                raise_amount = max(min_raise, min(strategic_amount, max_raise))
-                raise_amount = int(raise_amount)
+                # Get strategic raise size from AI
+                if player.ai_model and hasattr(player.ai_model, 'get_raise_size'):
+                    # Get current state for the AI
+                    hand_phase = self.current_street if hasattr(self, 'current_street') else 0
+                    state = player.ai_model.get_state_features(
+                        player.hand, self.community_cards, self.pot, self.current_bet,
+                        player.chips, player.current_bet, self.num_players,
+                        sum(1 for p in self.players if not p.folded),
+                        self.players.index(player), self.action_history[-10:], 
+                        self.opponent_bets[-10:],
+                        hand_phase=hand_phase
+                    )
+                    raise_amount = player.ai_model.get_raise_size(
+                        state, self.pot, self.current_bet, player.chips, 
+                        player.current_bet, min_raise
+                    )
+                else:
+                    # Fallback for untrained AI - simple strategy
+                    max_raise = player.chips - call_amount
+                    # Random AI chooses between different sizes
+                    if max_raise > min_raise:
+                        options = [min_raise]
+                        if pot_size * 0.5 <= max_raise:
+                            options.append(int(pot_size * 0.5))
+                        if pot_size * 0.75 <= max_raise:
+                            options.append(int(pot_size * 0.75))
+                        raise_amount = random.choice(options)
+                    else:
+                        raise_amount = min_raise
             
             # Execute the raise
             call_amount = self.current_bet - player.current_bet
@@ -482,9 +550,11 @@ class TexasHoldEm:
             
             self.opponent_bets.append(total)
             if verbose:
-                actual_raise = self.current_bet - old_bet
-                print(f"{player.name} raises ${actual_raise} to ${player.current_bet} (total bet)")
-                
+                if old_bet > 0:
+                    print(f"{player.name} raises to ${self.current_bet}")
+                else:
+                    print(f"{player.name} bets ${self.current_bet}")
+                    
         elif action == Action.ALL_IN:
             amount = player.bet(player.chips)
             self.pot += amount
@@ -493,13 +563,14 @@ class TexasHoldEm:
                 self.current_bet = player.current_bet
                 # Track raise amount if this all-in is effectively a raise
                 self.last_raise_amount = self.current_bet - old_bet
-                if verbose and old_bet > 0:
-                    print(f"{player.name} goes all-in for ${amount} (raises ${self.current_bet - old_bet})")
-                elif verbose:
-                    print(f"{player.name} goes all-in for ${amount}")
+                if verbose:
+                    if old_bet > 0:
+                        print(f"{player.name} goes all-in for ${amount} (raises to ${self.current_bet})")
+                    else:
+                        print(f"{player.name} goes all-in for ${amount}")
             else:
                 if verbose:
-                    print(f"{player.name} goes all-in for ${amount}")
+                    print(f"{player.name} goes all-in for ${amount} (call)")
             self.opponent_bets.append(amount)
     
     def get_human_action(self, player, valid_actions):
@@ -513,13 +584,82 @@ class TexasHoldEm:
         for i, action in action_map.items():
             if action == Action.CALL:
                 print(f"{i}: CALL ${self.current_bet - player.current_bet}")
+            elif action == Action.RAISE:
+                call_amount = self.current_bet - player.current_bet
+                min_raise = self.last_raise_amount if hasattr(self, 'last_raise_amount') else self.big_blind
+                min_total = call_amount + min_raise
+                print(f"{i}: RAISE (minimum ${min_raise} on top of ${call_amount} call)")
             else:
                 print(f"{i}: {action.name}")
         
         while True:
             choice = input("Choose action: ")
             if choice in action_map:
-                return action_map[choice]
+                action = action_map[choice]
+                
+                # If RAISE is chosen, prompt for amount
+                if action == Action.RAISE:
+                    call_amount = self.current_bet - player.current_bet
+                    min_raise = self.last_raise_amount if hasattr(self, 'last_raise_amount') else self.big_blind
+                    max_raise = player.chips - call_amount
+                    pot_size = self.pot + call_amount
+                    
+                    print(f"\nRaise sizing options:")
+                    print(f"  Current pot (including call): ${pot_size}")
+                    print(f"  Minimum raise: ${min_raise}")
+                    print(f"  Maximum raise: ${max_raise} (all-in)")
+                    
+                    # Show common raise sizes
+                    sizes = []
+                    sizes.append(("Minimum", min_raise))
+                    
+                    one_third = int(pot_size * 0.33)
+                    if one_third > min_raise:
+                        sizes.append(("1/3 pot", one_third))
+                    
+                    half_pot = int(pot_size * 0.5)
+                    if half_pot > min_raise and half_pot <= max_raise:
+                        sizes.append(("1/2 pot", half_pot))
+                    
+                    three_quarters = int(pot_size * 0.75)
+                    if three_quarters > min_raise and three_quarters <= max_raise:
+                        sizes.append(("3/4 pot", three_quarters))
+                    
+                    full_pot = pot_size
+                    if full_pot > min_raise and full_pot <= max_raise:
+                        sizes.append(("Pot-sized", full_pot))
+                    
+                    overbet = int(pot_size * 1.5)
+                    if overbet > min_raise and overbet <= max_raise:
+                        sizes.append(("1.5x pot", overbet))
+                    
+                    print("\nSuggested sizes:")
+                    for i, (name, size) in enumerate(sizes):
+                        print(f"  {i}: {name} = ${size}")
+                    print(f"  Or enter custom amount (${min_raise}-${max_raise})")
+                    
+                    while True:
+                        raise_input = input("Choose size or enter amount: ")
+                        
+                        # Check if it's a suggested size index
+                        if raise_input.isdigit() and int(raise_input) < len(sizes):
+                            raise_amount = sizes[int(raise_input)][1]
+                            break
+                        
+                        # Try to parse as custom amount
+                        try:
+                            raise_amount = int(raise_input)
+                            if min_raise <= raise_amount <= max_raise:
+                                break
+                            else:
+                                print(f"Invalid amount. Must be between ${min_raise} and ${max_raise}")
+                        except ValueError:
+                            print("Invalid input. Enter a number.")
+                    
+                    # Store the raise amount for execute_action to use
+                    self.human_raise_amount = raise_amount
+                
+                return action
             print("Invalid choice.")
     
     def determine_winners(self, verbose=True):

@@ -292,3 +292,83 @@ class PokerAI:
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.epsilon = checkpoint.get('epsilon', 0)
         self.updates = checkpoint.get('updates', 0)
+    
+    def get_raise_size(self, state, pot, current_bet, player_chips, player_bet, min_raise):
+        """Strategically determine raise size based on game state"""
+        with torch.no_grad():
+            self.q_network.eval()
+            q_values = self.q_network(state.unsqueeze(0)).squeeze()
+            self.q_network.train()
+            
+            # Get Q-value for raise action
+            raise_confidence = q_values[Action.RAISE.value].item()
+        
+        call_amount = current_bet - player_bet
+        pot_after_call = pot + call_amount
+        max_raise = player_chips - call_amount
+        
+        # Build list of valid raise sizes
+        valid_sizes = []
+        
+        # Always include minimum raise
+        if min_raise <= max_raise:
+            valid_sizes.append(('min', min_raise, 0.15))
+        
+        # Calculate strategic sizes
+        one_third = int(pot_after_call * 0.33)
+        if one_third > min_raise and one_third <= max_raise:
+            valid_sizes.append(('third', one_third, 0.20))
+        
+        half_pot = int(pot_after_call * 0.5)
+        if half_pot > min_raise and half_pot <= max_raise:
+            valid_sizes.append(('half', half_pot, 0.25))
+        
+        three_quarters = int(pot_after_call * 0.75)
+        if three_quarters > min_raise and three_quarters <= max_raise:
+            valid_sizes.append(('three_quarters', three_quarters, 0.20))
+        
+        full_pot = pot_after_call
+        if full_pot > min_raise and full_pot <= max_raise:
+            valid_sizes.append(('pot', full_pot, 0.15))
+        
+        overbet = int(pot_after_call * 1.5)
+        if overbet > min_raise and overbet <= max_raise:
+            valid_sizes.append(('overbet', overbet, 0.05))
+        
+        if not valid_sizes:
+            return min_raise
+        
+        # Adjust weights based on confidence
+        # High confidence = larger bets, low confidence = smaller bets
+        adjusted_weights = []
+        for name, size, base_weight in valid_sizes:
+            if raise_confidence > 0.5:  # Confident
+                # Prefer larger sizes
+                if name in ['pot', 'overbet', 'three_quarters']:
+                    weight = base_weight * 1.5
+                elif name in ['min']:
+                    weight = base_weight * 0.5
+                else:
+                    weight = base_weight
+            elif raise_confidence < -0.5:  # Less confident
+                # Prefer smaller sizes
+                if name in ['min', 'third']:
+                    weight = base_weight * 1.5
+                elif name in ['pot', 'overbet']:
+                    weight = base_weight * 0.3
+                else:
+                    weight = base_weight
+            else:  # Neutral
+                weight = base_weight
+            
+            adjusted_weights.append(weight)
+        
+        # Normalize weights
+        total = sum(adjusted_weights)
+        adjusted_weights = [w/total for w in adjusted_weights]
+        
+        # Select size based on weights
+        import random
+        selected = random.choices([s[1] for s in valid_sizes], weights=adjusted_weights)[0]
+        
+        return selected
