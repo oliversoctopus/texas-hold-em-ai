@@ -21,7 +21,7 @@ def main():
     
     if choice == '1':
         episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
-        players = int(input("Number of players (2-6): ") or "4")
+        players = int(input("Number of players for evaluation (2-6): ") or "4")
         
         ai_model = train_ai_advanced(num_episodes=episodes)
         
@@ -47,7 +47,7 @@ def main():
         best_config, results, best_model = hyperparameter_tuning(
             num_configs=num_configs,
             episodes_per_config=episodes,
-            eval_games=30
+            eval_games=100
         )
         
         # Continue training the best model instead of starting from scratch
@@ -112,8 +112,10 @@ def main():
             # Option to evaluate
             eval_choice = input("\nEvaluate loaded model? (y/n): ")
             if eval_choice.lower() == 'y':
-                players = int(input("Number of players for evaluation (2-6): ") or "4")
-                evaluate_ai_full(ai_model, num_games=100, num_players=players)
+                min_players = int(input("Minimum number of players for evaluation (2-6): "))
+                max_players = int(input(f"Max number of players for evaluation ({min_players}-6): "))
+                for i in range(min_players, max_players+1):
+                    evaluate_ai_full(ai_model, num_games=100, num_players=i)
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting with untrained AI")

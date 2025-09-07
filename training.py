@@ -54,7 +54,7 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50)
         win_rate, avg_earnings = evaluate_ai_full(
             ai_model, 
             num_games=eval_games, 
-            num_players=4
+            num_players=6
         )
         
         # Calculate combined score
