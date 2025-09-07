@@ -21,9 +21,9 @@ def main():
     
     if choice == '1':
         episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
-        players = int(input("Number of players for evaluation (2-6): ") or "4")
+        players = int(input("Number of players for training and evaluation (2-6): ") or "4")
         
-        ai_model = train_ai_advanced(num_episodes=episodes)
+        ai_model = train_ai_advanced(num_episodes=episodes, num_players=players)
         
         # Evaluate
         eval_choice = input("\nEvaluate AI? (y/n): ")
@@ -43,11 +43,13 @@ def main():
         
         num_configs = int(input("Number of configurations to test (3-10): ") or "5")
         episodes = int(input("Training episodes per config (100-500): ") or "200")
+        players = int(input("Number of players for training and evaluation (2-6): ") or "4")
         
         best_config, results, best_model = hyperparameter_tuning(
             num_configs=num_configs,
             episodes_per_config=episodes,
-            eval_games=100
+            eval_games=30,
+            num_players=players
         )
         
         # Continue training the best model instead of starting from scratch
@@ -58,41 +60,17 @@ def main():
         best_model.config = best_config
         best_model.epsilon = best_config['epsilon'] * (best_config['epsilon_decay'] ** episodes)  # Adjust epsilon
         
-        # Create a training game and continue training
-        from game_engine import TexasHoldEmTraining
-        from player import Player
-        import numpy as np
-        
-        training_game = TexasHoldEmTraining(num_players=4)
-        
-        # Continue training the best model
+        # Continue training and get the best model from all trained models
         print(f"Continuing training for {additional_episodes} episodes...")
-        for episode in range(additional_episodes):
-            if episode % 100 == 0:
-                print(f"Episode {episode}/{additional_episodes}, Epsilon: {best_model.epsilon:.3f}, "
-                    f"Buffer: {len(best_model.memory)}")
-            
-            # Use the best model for self-play
-            ai_models = [best_model] * 4
-            
-            # Play multiple hands per episode
-            for hand in range(10):
-                training_game.reset_game()
-                winners = training_game.simulate_hand(ai_models)
-            
-            # Train multiple times per episode
-            if len(best_model.memory) > best_model.batch_size * 2:
-                for _ in range(5):
-                    best_model.replay()
-            
-            # Decay epsilon
-            best_model.decay_epsilon()
-        
-        ai_model = best_model
+        ai_model = train_ai_advanced(
+            num_episodes=additional_episodes, 
+            config=best_config, 
+            num_players=players
+        )
         
         # Full evaluation
         print("\nPerforming final evaluation...")
-        evaluate_ai_full(ai_model, num_games=100, num_players=4)
+        evaluate_ai_full(ai_model, num_games=100, num_players=players)
         
         # Save
         save_choice = input("\nSave model? (y/n): ")
@@ -108,6 +86,7 @@ def main():
             ai_model.load(filename)
             print(f"Model loaded from {filename}")
             ai_model.epsilon = 0  # No exploration during play
+            print(f"Config of loaded model: {ai_model.config}")
             
             # Option to evaluate
             eval_choice = input("\nEvaluate loaded model? (y/n): ")
