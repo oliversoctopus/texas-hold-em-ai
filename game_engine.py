@@ -18,6 +18,7 @@ class TexasHoldEmTraining:
         self.action_history = []
         self.opponent_bets = []
         self.dealer_position = random.randint(0, self.num_players - 1)
+        self.last_raise_amount = 20  # Initialize to big blind
     
     def simulate_hand(self, ai_models):
         """Simulate a hand and collect experiences"""
@@ -105,8 +106,12 @@ class TexasHoldEmTraining:
         current = first_to_act
         players_acted = set()
         
-        # Reset minimum raise for new street
-        self.last_raise_amount = 20  # Big blind
+        # Store current street for execute_action
+        self.current_street = street_idx
+        
+        # Reset minimum raise for new street (keep existing value if mid-street)
+        if not hasattr(self, 'last_raise_amount'):
+            self.last_raise_amount = 20  # Big blind
         
         for _ in range(len(self.players) * 3):  # Max iterations
             player = self.players[current]
@@ -203,7 +208,7 @@ class TexasHoldEmTraining:
         return actions
     
     def execute_action(self, player, action):
-        """Execute a player action"""
+        """Execute a player action with intelligent raise sizing"""
         if action == Action.FOLD:
             player.folded = True
         elif action == Action.CHECK:
@@ -213,17 +218,70 @@ class TexasHoldEmTraining:
             self.pot += amount
             self.opponent_bets.append(amount)
         elif action == Action.RAISE:
-            raise_amount = min(40, player.chips // 3)
+            # Use intelligent raise sizing for AI
             call_amount = self.current_bet - player.current_bet
+            pot_size = self.pot + call_amount
+            
+            # Determine minimum raise
+            if hasattr(self, 'last_raise_amount'):
+                min_raise = self.last_raise_amount
+            else:
+                min_raise = 20  # Big blind
+            
+            # Get strategic raise size from AI if available
+            if player.ai_model and hasattr(player.ai_model, 'get_raise_size'):
+                # Get current state for the AI
+                street_idx = self.current_street if hasattr(self, 'current_street') else 0
+                state = player.ai_model.get_state_features(
+                    player.hand, self.community_cards, self.pot, self.current_bet,
+                    player.chips, player.current_bet, self.num_players,
+                    sum(1 for p in self.players if not p.folded),
+                    self.players.index(player), self.action_history[-10:], 
+                    self.opponent_bets[-10:],
+                    hand_phase=street_idx
+                )
+                raise_amount = player.ai_model.get_raise_size(
+                    state, self.pot, self.current_bet, player.chips, 
+                    player.current_bet, min_raise
+                )
+            else:
+                # Fallback - use variable sizing based on pot
+                max_raise = player.chips - call_amount
+                if max_raise > min_raise:
+                    # Choose from different strategic sizes
+                    options = []
+                    if min_raise <= max_raise:
+                        options.append(min_raise)
+                    if pot_size * 0.33 <= max_raise and pot_size * 0.33 > min_raise:
+                        options.append(int(pot_size * 0.33))
+                    if pot_size * 0.5 <= max_raise and pot_size * 0.5 > min_raise:
+                        options.append(int(pot_size * 0.5))
+                    if pot_size * 0.75 <= max_raise and pot_size * 0.75 > min_raise:
+                        options.append(int(pot_size * 0.75))
+                    if options:
+                        raise_amount = random.choice(options)
+                    else:
+                        raise_amount = min_raise
+                else:
+                    raise_amount = min_raise
+            
+            # Execute the raise
+            old_bet = self.current_bet
             total = player.bet(call_amount + raise_amount)
             self.pot += total
             self.current_bet = player.current_bet
+            
+            # Track raise amount for minimum raise rules
+            self.last_raise_amount = self.current_bet - old_bet
+            
             self.opponent_bets.append(total)
         elif action == Action.ALL_IN:
             amount = player.bet(player.chips)
             self.pot += amount
             if player.current_bet > self.current_bet:
+                old_bet = self.current_bet
                 self.current_bet = player.current_bet
+                self.last_raise_amount = self.current_bet - old_bet
             self.opponent_bets.append(amount)
     
     def determine_winners(self):

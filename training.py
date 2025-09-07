@@ -6,7 +6,7 @@ from player import Player
 from card_deck import Card
 
 def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50):
-    """Automatically tune hyperparameters"""
+    """Automatically tune hyperparameters and return the best trained model"""
     print("=" * 60)
     print("HYPERPARAMETER TUNING")
     print("=" * 60)
@@ -34,6 +34,7 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50)
     
     best_config = None
     best_score = -float('inf')
+    best_model = None
     results = []
     
     for idx, config in enumerate(configs):
@@ -48,8 +49,15 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50)
             verbose=False
         )
         
-        # Evaluate
-        win_rate, avg_earnings = evaluate_ai_quick(ai_model, num_games=eval_games)
+        # Use real evaluation instead of quick evaluation
+        print(f"Evaluating configuration {idx + 1}...")
+        win_rate, avg_earnings = evaluate_ai_full(
+            ai_model, 
+            num_games=eval_games, 
+            num_players=4
+        )
+        
+        # Calculate combined score
         score = win_rate + avg_earnings / 100  # Combined metric
         
         results.append({
@@ -64,6 +72,7 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50)
         if score > best_score:
             best_score = score
             best_config = config
+            best_model = ai_model  # Keep the best model
     
     print("\n" + "=" * 60)
     print("TUNING COMPLETE")
@@ -75,7 +84,7 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50)
     print(f"  Batch size: {best_config['batch_size']}")
     print(f"  Best score: {best_score:.2f}")
     
-    return best_config, results
+    return best_config, results, best_model  # Return the trained model too
 
 def train_ai_advanced(num_episodes=1000, config=None, verbose=True):
     """Advanced training with better reward shaping"""
@@ -147,73 +156,6 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True):
             print(f"Final loss: {np.mean(main_ai.loss_history[-100:]):.4f}")
     
     return main_ai
-
-def evaluate_ai_quick(ai_model, num_games=100):
-    """Quick evaluation for hyperparameter tuning"""
-    ai_model.epsilon = 0  # No exploration during evaluation
-    
-    wins = 0
-    total_earnings = 0
-    
-    for game_num in range(num_games):
-        game = TexasHoldEmTraining(num_players=4)
-        game.reset_game()
-        
-        # Setup players - one trained AI, rest random
-        game.players = []
-        
-        trained = Player("Trained", 1000, is_ai=True)
-        trained.ai_model = ai_model
-        game.players.append(trained)
-        
-        for i in range(3):
-            random_player = Player(f"Random_{i}", 1000, is_ai=True)
-            # No AI model means random play
-            game.players.append(random_player)
-        
-        # Simulate game
-        initial_chips = 1000
-        for _ in range(30):
-            if sum(1 for p in game.players if p.chips > 0) <= 1:
-                break
-            
-            # Quick hand simulation
-            for player in game.players:
-                player.reset_hand()
-                if player.chips > 0:
-                    player.hand = game.deck.draw(2)
-            
-            game.community_cards = game.deck.draw(5)
-            
-            # Simplified evaluation
-            active = [p for p in game.players if p.chips > 0]
-            if not active:
-                break
-            
-            # Random winner for speed (in real eval we'd calculate properly)
-            if random.random() < 0.35:  # Give trained AI slightly better odds
-                if trained in active:
-                    trained.chips += 50
-                    for p in active:
-                        if p != trained:
-                            p.chips = max(0, p.chips - 50 // (len(active) - 1))
-            else:
-                winner = random.choice([p for p in active if p != trained] if len(active) > 1 else active)
-                if winner and winner != trained:
-                    winner.chips += 30
-                    trained.chips = max(0, trained.chips - 30)
-            
-            game.deck.reset()
-        
-        # Check results
-        if trained.chips > initial_chips:
-            wins += 1
-        total_earnings += trained.chips - initial_chips
-    
-    win_rate = (wins / num_games) * 100
-    avg_earnings = total_earnings / num_games
-    
-    return win_rate, avg_earnings
 
 def evaluate_ai_full(ai_model, num_games=100, num_players=4):
     """Full evaluation against random players"""
