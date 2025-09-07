@@ -54,17 +54,20 @@ def main():
         
         # Continue training the best model instead of starting from scratch
         print("\nContinuing training with best model and configuration...")
+        print(f"Best model config: {best_config}")
         additional_episodes = int(input("Additional training episodes (500-3000): ") or "1000")
         
-        # Set the best model's config to ensure consistency
-        best_model.config = best_config
-        best_model.epsilon = best_config['epsilon'] * (best_config['epsilon_decay'] ** episodes)  # Adjust epsilon
+        # The best_model already has the correct config set
+        # Adjust epsilon based on how much training has been done
+        best_model.epsilon = best_config['epsilon'] * (best_config['epsilon_decay'] ** episodes)
         
-        # Continue training and get the best model from all trained models
+        # Continue training with the actual best configuration
         print(f"Continuing training for {additional_episodes} episodes...")
+        
+        # Train more with the best model's actual configuration
         ai_model = train_ai_advanced(
             num_episodes=additional_episodes, 
-            config=best_config, 
+            config=best_model.config,  # Use the best model's actual config
             num_players=players
         )
         

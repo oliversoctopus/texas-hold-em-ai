@@ -44,12 +44,16 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
               f"Hidden={config['hidden_sizes']}, Batch={config['batch_size']}")
         
         # Train with this configuration and specified number of players
+        # This will now return the best model among main and opponents
         ai_model = train_ai_advanced(
             num_episodes=episodes_per_config,
             config=config,
             verbose=False,
             num_players=num_players
         )
+        
+        # The returned model now has the correct config (might be from an opponent)
+        actual_config = ai_model.config
         
         # Quick pre-evaluation to check if model learned anything
         print(f"Pre-evaluating configuration {idx + 1}...")
@@ -63,7 +67,8 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
         if quick_win_rate < 10:  # Less than 10% win rate in quick eval
             print(f"Configuration {idx + 1} performing poorly (win rate: {quick_win_rate:.1f}%), skipping full evaluation")
             results.append({
-                'config': config,
+                'original_config': config,  # Config we tried to train with
+                'actual_config': actual_config,  # Config of the best model
                 'win_rate': quick_win_rate,
                 'earnings': quick_earnings,
                 'score': quick_win_rate + quick_earnings / 100
@@ -86,7 +91,8 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
             score += (win_rate - 50) * 0.5  # Bonus for win rates above 50%
         
         results.append({
-            'config': config,
+            'original_config': config,
+            'actual_config': actual_config,
             'win_rate': win_rate,
             'earnings': avg_earnings,
             'score': score
@@ -94,9 +100,15 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
         
         print(f"Results: Win rate={win_rate:.1f}%, Earnings=${avg_earnings:.0f}, Score={score:.2f}")
         
+        # Check if actual config differs from original
+        if actual_config != config:
+            print(f"  Note: Best model was an opponent, not the main AI")
+            print(f"  Actual config: LR={actual_config['learning_rate']}, "
+                  f"Hidden={actual_config['hidden_sizes']}")
+        
         if score > best_score:
             best_score = score
-            best_config = config
+            best_config = actual_config  # Use the actual config of the best model
             best_model = ai_model
     
     print("\n" + "=" * 60)
@@ -114,8 +126,11 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
     print("\nAll configurations ranked:")
     sorted_results = sorted(results, key=lambda x: x['score'], reverse=True)
     for i, result in enumerate(sorted_results, 1):
+        config_note = ""
+        if result['actual_config'] != result['original_config']:
+            config_note = " (from opponent)"
         print(f"  {i}. Win rate: {result['win_rate']:.1f}%, "
-              f"Earnings: ${result['earnings']:.0f}, Score: {result['score']:.2f}")
+              f"Earnings: ${result['earnings']:.0f}, Score: {result['score']:.2f}{config_note}")
     
     return best_config, results, best_model
 
@@ -161,6 +176,7 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
     
     # Create multiple opponent AIs with different skill levels for diversity
     opponents = []
+    opponent_configs = []  # Track configs for all opponents
     
     # Weak opponent (high exploration, simple network)
     weak_config = {
@@ -171,6 +187,7 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
         'epsilon_decay': 0.999
     }
     opponents.append(PokerAI(config=weak_config))
+    opponent_configs.append(weak_config)
     
     # Medium opponent (moderate exploration, decent network)
     medium_config = {
@@ -181,6 +198,7 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
         'epsilon_decay': 0.997
     }
     opponents.append(PokerAI(config=medium_config))
+    opponent_configs.append(medium_config)
     
     # Strong opponent (low exploration, complex network) - clone of main config
     strong_config = config.copy() if config else {
@@ -192,6 +210,7 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
     }
     strong_config['epsilon'] = 0.3  # Ensure some exploration
     opponents.append(PokerAI(config=strong_config))
+    opponent_configs.append(strong_config)
     
     # Create additional opponents if needed for more players
     while len(opponents) < num_players - 1:
@@ -202,6 +221,7 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
         variant_config['learning_rate'] *= random.choice([0.5, 1.0, 2.0])
         variant_config['epsilon'] = min(1.0, variant_config['epsilon'] * random.uniform(0.8, 1.2))
         opponents.append(PokerAI(config=variant_config))
+        opponent_configs.append(variant_config)
     
     training_game = TexasHoldEmTraining(num_players=num_players)
     
@@ -296,42 +316,49 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
         print(f"Overall win rate: {win_percentage:.1f}%")
         if main_ai.loss_history:
             print(f"Final loss: {np.mean(main_ai.loss_history[-100:]):.4f}")
-        
-        # Evaluate all models and return the best one
+    
+    # ALWAYS evaluate all models and return the best one (even when verbose=False)
+    if verbose:
         print("\n" + "=" * 60)
         print("EVALUATING ALL TRAINED MODELS")
         print("=" * 60)
-        
-        all_models = [('Main AI', main_ai)] + [(f'Opponent {i+1}', opp) for i, opp in enumerate(opponents[:3])]
-        best_model = None
-        best_score = -float('inf')
-        best_name = None
-        
-        for name, model in all_models:
+    
+    all_models = [('Main AI', main_ai, config)] + [(f'Opponent {i+1}', opp, opponent_configs[i]) for i, opp in enumerate(opponents[:3])]
+    best_model = None
+    best_score = -float('inf')
+    best_name = None
+    best_model_config = None
+    
+    for name, model, model_config in all_models:
+        if verbose:
             print(f"\nEvaluating {name}...")
-            model.epsilon = 0  # No exploration during evaluation
-            win_rate, avg_earnings = evaluate_ai_full(model, num_games=20, num_players=num_players)
-            score = win_rate + avg_earnings / 100
-            
-            print(f"{name}: Win rate={win_rate:.1f}%, Earnings=${avg_earnings:.0f}, Score={score:.2f}")
-            
-            if score > best_score:
-                best_score = score
-                best_model = model
-                best_name = name
         
+        original_epsilon = model.epsilon
+        model.epsilon = 0  # No exploration during evaluation
+        win_rate, avg_earnings = evaluate_ai_full(model, num_games=20, num_players=num_players)
+        score = win_rate + avg_earnings / 100
+        
+        if verbose:
+            print(f"{name}: Win rate={win_rate:.1f}%, Earnings=${avg_earnings:.0f}, Score={score:.2f}")
+        
+        if score > best_score:
+            best_score = score
+            best_model = model
+            best_name = name
+            best_model_config = model_config
+        
+        # Restore original epsilon
+        model.epsilon = original_epsilon
+    
+    if verbose:
         print("\n" + "=" * 60)
         print(f"BEST MODEL: {best_name} with score {best_score:.2f}")
         print("=" * 60)
-        
-        # Restore original epsilon for continued training
-        main_ai.epsilon = main_ai.config['min_epsilon']
-        for opp in opponents:
-            opp.epsilon = opp.config['min_epsilon']
-        
-        return best_model
     
-    return main_ai
+    # Set the best model's config to be accurate
+    best_model.config = best_model_config
+    
+    return best_model
 
 def evaluate_ai_full(ai_model, num_games=100, num_players=4):
     """Full evaluation against random players"""
