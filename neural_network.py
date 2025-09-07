@@ -64,10 +64,14 @@ class PokerNet(nn.Module):
         
         self.network = nn.Sequential(*layers)
         
-        # Initialize weights
+        # Initialize weights with smaller values for stability
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                # Use smaller initialization for deeper networks
+                if len(hidden_sizes) > 2:
+                    nn.init.xavier_uniform_(m.weight, gain=0.5)
+                else:
+                    nn.init.xavier_uniform_(m.weight)
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
