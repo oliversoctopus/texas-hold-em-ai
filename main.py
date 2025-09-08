@@ -20,9 +20,11 @@ def main():
     ai_model = None
     
     if choice == '1':
+        print("\nStandard training using self-play")
         episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
-        players = int(input("Number of players for training and evaluation (2-6): ") or "4")
+        players = int(input("Number of players for training (2-6): ") or "4")
         
+        print(f"\nTraining {players} AIs using self-play...")
         ai_model = train_ai_advanced(num_episodes=episodes, num_players=players)
         
         # Evaluate
@@ -36,14 +38,14 @@ def main():
             filename = input("Filename (default: poker_ai.pth): ") or "poker_ai.pth"
             ai_model.save(filename)
             print(f"Model saved to {filename}")
-    
+
     elif choice == '2':
-        print("\nStarting hyperparameter tuning...")
+        print("\nHyperparameter tuning with self-play training")
         print("This will test multiple configurations to find the best one.")
         
         num_configs = int(input("Number of configurations to test (3-10): ") or "5")
         episodes = int(input("Training episodes per config (100-500): ") or "200")
-        players = int(input("Number of players for training and evaluation (2-6): ") or "4")
+        players = int(input("Number of players for training (2-6): ") or "4")
         
         best_config, results, best_model = hyperparameter_tuning(
             num_configs=num_configs,
@@ -52,22 +54,14 @@ def main():
             num_players=players
         )
         
-        # Continue training the best model instead of starting from scratch
-        print("\nContinuing training with best model and configuration...")
-        print(f"Best model config: {best_config}")
+        # Continue training the best model
+        print("\nContinuing training with best configuration...")
         additional_episodes = int(input("Additional training episodes (500-3000): ") or "1000")
         
-        # The best_model already has the correct config set
-        # Adjust epsilon based on how much training has been done
-        best_model.epsilon = best_config['epsilon'] * (best_config['epsilon_decay'] ** episodes)
-        
-        # Continue training with the actual best configuration
-        print(f"Continuing training for {additional_episodes} episodes...")
-        
-        # Train more with the best model's actual configuration
+        print(f"Training for {additional_episodes} more episodes using self-play...")
         ai_model = train_ai_advanced(
             num_episodes=additional_episodes, 
-            config=best_model.config,  # Use the best model's actual config
+            config=best_config,
             num_players=players
         )
         
