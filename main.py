@@ -3,6 +3,7 @@ from game_constants import Action
 from poker_ai import PokerAI
 from game_engine import TexasHoldEm
 from training import hyperparameter_tuning, train_ai_advanced, evaluate_ai_full
+from player import Player
 
 def main():
     """Main game loop"""
@@ -54,27 +55,178 @@ def main():
             num_players=players
         )
         
-        # Continue training the best model
-        print("\nContinuing training with best configuration...")
-        additional_episodes = int(input("Additional training episodes (500-3000): ") or "1000")
+        # Option to save the best model from hyperparameter tuning
+        print("\n" + "=" * 60)
+        print("SAVE CHECKPOINT")
+        print("=" * 60)
+        save_checkpoint = input("Save the best model from hyperparameter tuning before additional training? (y/n): ")
+        if save_checkpoint.lower() == 'y':
+            checkpoint_filename = input("Checkpoint filename (default: poker_ai_checkpoint.pth): ") or "poker_ai_checkpoint.pth"
+            best_model.save(checkpoint_filename)
+            print(f"Checkpoint saved to {checkpoint_filename}")
         
-        print(f"Training for {additional_episodes} more episodes using self-play...")
-        ai_model = train_ai_advanced(
-            num_episodes=additional_episodes, 
-            config=best_config,
-            num_players=players
-        )
+        # Ask if user wants to continue with additional training
+        continue_training = input("\nContinue with additional training? (y/n): ")
+        if continue_training.lower() != 'y':
+            print("Training complete. Using model from hyperparameter tuning.")
+            ai_model = best_model
+        else:
+            # Continue training the ACTUAL best model, not starting over
+            print("\nContinuing training with the best model found...")
+            print(f"Best model's configuration: {best_config}")
+            additional_episodes = int(input("Additional training episodes (500-3000): ") or "1000")
+            
+            # Adjust the best model's epsilon based on how much it has already trained
+            best_model.epsilon = best_config['epsilon'] * (best_config['epsilon_decay'] ** episodes)
+            print(f"Continuing from epsilon: {best_model.epsilon:.3f}")
+            
+            # Create copies of the best model for challenging self-play
+            print(f"Creating {players - 1} copies of the best model for self-play training...")
+            training_partners = []
+            
+            for i in range(players - 1):
+                # Create a new AI with the same config
+                partner = PokerAI(config=best_config.copy())
+                
+                # Copy the trained network weights from the best model
+                partner._init_networks(best_model.input_size)
+                partner.q_network.load_state_dict(best_model.q_network.state_dict())
+                partner.target_network.load_state_dict(best_model.target_network.state_dict())
+                
+                # Copy the optimizer state for continued training
+                partner.optimizer.load_state_dict(best_model.optimizer.state_dict())
+                
+                # Copy training progress
+                partner.updates = best_model.updates
+                partner.input_size = best_model.input_size
+                
+                # Vary epsilon slightly to encourage strategy divergence
+                partner.epsilon = best_model.epsilon * random.uniform(0.8, 1.2)
+                partner.epsilon = min(0.5, max(0.01, partner.epsilon))  # Keep in reasonable range
+                
+                # Each partner gets a slightly different learning rate to encourage divergence
+                for param_group in partner.optimizer.param_groups:
+                    param_group['lr'] = best_config['learning_rate'] * random.uniform(0.8, 1.2)
+                
+                training_partners.append(partner)
+                print(f"  Partner {i+1}: epsilon={partner.epsilon:.3f}, lr={partner.optimizer.param_groups[0]['lr']:.6f}")
+            
+            # Continue training using self-play with these strong partners
+            from game_engine import TexasHoldEmTraining
+            import numpy as np
+            
+            training_game = TexasHoldEmTraining(num_players=players)
+            
+            print(f"\nContinuing self-play training for {additional_episodes} episodes...")
+            print("All models start from the same strong baseline and will diverge through training.")
+            
+            wins = {f'Model_{i}': 0 for i in range(players)}
+            recent_performances = {f'Model_{i}': [] for i in range(players)}
+            all_models = [best_model] + training_partners
+            
+            for episode in range(additional_episodes):
+                # Rotate positions for fairness
+                rotation = episode % players
+                rotated_models = all_models[rotation:] + all_models[:rotation]
+                
+                # Play multiple hands
+                hands_per_episode = 10
+                episode_wins = {f'Model_{i}': 0 for i in range(players)}
+                
+                for hand in range(hands_per_episode):
+                    training_game.reset_game()
+                    winners = training_game.simulate_hand(rotated_models)
+                    
+                    # Track wins
+                    for winner in winners:
+                        for i, model in enumerate(rotated_models):
+                            if winner.ai_model == model:
+                                # Account for rotation when tracking wins
+                                original_idx = (i - rotation) % players
+                                wins[f'Model_{original_idx}'] += 1
+                                episode_wins[f'Model_{original_idx}'] += 1
+                
+                # Update performance tracking
+                for i in range(players):
+                    recent_performances[f'Model_{i}'].append(episode_wins[f'Model_{i}'] / hands_per_episode)
+                    if len(recent_performances[f'Model_{i}']) > 100:
+                        recent_performances[f'Model_{i}'].pop(0)
+                
+                # Train all models
+                for i, model in enumerate(all_models):
+                    if len(model.memory) > model.batch_size * 2:
+                        # Adaptive training based on performance
+                        train_iterations = 5
+                        if len(recent_performances[f'Model_{i}']) >= 20:
+                            recent_avg = np.mean(recent_performances[f'Model_{i}'][-20:])
+                            expected_rate = 1.0 / players
+                            if recent_avg < expected_rate * 0.8:  # Below 80% of expected
+                                train_iterations = 8
+                            elif recent_avg > expected_rate * 1.5:  # Above 150% of expected
+                                train_iterations = 3  # Train less if dominating
+                        
+                        for _ in range(train_iterations):
+                            model.replay()
+                    
+                    # Decay epsilon
+                    model.decay_epsilon()
+                
+                # Status update
+                if episode % 100 == 0:
+                    print(f"\nEpisode {episode}/{additional_episodes}")
+                    for i in range(players):
+                        if recent_performances[f'Model_{i}']:
+                            recent_win_rate = np.mean(recent_performances[f'Model_{i}'][-20:]) * 100
+                            model_name = "Best (original)" if i == 0 else f"Partner {i}"
+                            print(f"  {model_name}: Win rate: {recent_win_rate:.1f}%, Epsilon: {all_models[i].epsilon:.3f}")
+            
+            print(f"\nAdditional training complete!")
+            
+            # Evaluate all models to find the best one after continued training
+            print("\n" + "=" * 60)
+            print("EVALUATING ALL MODELS AFTER CONTINUED TRAINING")
+            print("=" * 60)
+            
+            best_final_model = None
+            best_final_score = -float('inf')
+            best_final_idx = -1
+            
+            for i, model in enumerate(all_models):
+                model_name = "Original best" if i == 0 else f"Partner {i}"
+                print(f"\nEvaluating {model_name}...")
+                
+                # Save epsilon and disable exploration for evaluation
+                original_epsilon = model.epsilon
+                model.epsilon = 0
+                
+                win_rate, avg_earnings = evaluate_ai_full(model, num_games=30, num_players=players)
+                score = win_rate + avg_earnings / 100
+                
+                print(f"  {model_name}: Win rate={win_rate:.1f}%, Earnings=${avg_earnings:.0f}, Score={score:.2f}")
+                
+                if score > best_final_score:
+                    best_final_score = score
+                    best_final_model = model
+                    best_final_idx = i
+                
+                # Restore epsilon
+                model.epsilon = original_epsilon
+            
+            model_name = "Original best" if best_final_idx == 0 else f"Partner {best_final_idx}"
+            print(f"\nBest model after continued training: {model_name} with score {best_final_score:.2f}")
+            
+            ai_model = best_final_model
         
         # Full evaluation
         print("\nPerforming final evaluation...")
         evaluate_ai_full(ai_model, num_games=100, num_players=players)
         
-        # Save
-        save_choice = input("\nSave model? (y/n): ")
+        # Save final model
+        save_choice = input("\nSave final model? (y/n): ")
         if save_choice.lower() == 'y':
-            filename = input("Filename (default: poker_ai_tuned.pth): ") or "poker_ai_tuned.pth"
+            filename = input("Filename (default: poker_ai_final.pth): ") or "poker_ai_final.pth"
             ai_model.save(filename)
-            print(f"Model saved to {filename}")
+            print(f"Final model saved to {filename}")
     
     elif choice == '3':
         filename = input("Model filename (default: poker_ai.pth): ") or "poker_ai.pth"
