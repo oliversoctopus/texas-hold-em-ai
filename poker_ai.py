@@ -248,13 +248,10 @@ class PokerAI:
             priorities = losses.detach().cpu().numpy()
             self.memory.update_priorities(indices, priorities)
         
-        # Optimize with gradient clipping
+        # Optimize
         self.optimizer.zero_grad()
         loss.backward()
-        
-        # Clip gradients to prevent instability
-        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
-        
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1)
         self.optimizer.step()
         
         self.loss_history.append(loss.item())
