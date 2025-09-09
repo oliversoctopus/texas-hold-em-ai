@@ -4,6 +4,7 @@ from poker_ai import PokerAI
 from game_engine import TexasHoldEm
 from training import hyperparameter_tuning, train_ai_advanced, evaluate_ai_full
 from player import Player
+from advanced_evaluation import AdvancedEvaluator, evaluate_all_models
 
 def main():
     """Main game loop"""
@@ -31,7 +32,14 @@ def main():
         # Evaluate
         eval_choice = input("\nEvaluate AI? (y/n): ")
         if eval_choice.lower() == 'y':
-            evaluate_ai_full(ai_model, num_games=100, num_players=players)
+            eval_choice = input("\nEvaluation type: (1) Random opponents, (2) Strong opponents, (3) Comprehensive: ")
+            if eval_choice == '1':
+                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=False)
+            elif eval_choice == '2':
+                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+            elif eval_choice == '3':
+                evaluator = AdvancedEvaluator(['tuned_ai_v2.pth', 'tuned_ai_v4.pth', 'poker_ai_tuned.pth'])
+                evaluator.comprehensive_evaluation(ai_model, model_name="Current Model", num_games=200)
         
         # Save
         save_choice = input("\nSave model? (y/n): ")
@@ -219,7 +227,15 @@ def main():
         
         # Full evaluation
         print("\nPerforming final evaluation...")
-        evaluate_ai_full(ai_model, num_games=100, num_players=players)
+        if eval_choice.lower() == 'y':
+            eval_choice = input("\nEvaluation type: (1) Random opponents, (2) Strong opponents, (3) Comprehensive: ")
+            if eval_choice == '1':
+                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=False)
+            elif eval_choice == '2':
+                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+            elif eval_choice == '3':
+                evaluator = AdvancedEvaluator(['tuned_ai_v2.pth', 'tuned_ai_v4.pth', 'poker_ai_tuned.pth'])
+                evaluator.comprehensive_evaluation(ai_model, model_name="Current Model", num_games=200)
         
         # Save final model
         save_choice = input("\nSave final model? (y/n): ")

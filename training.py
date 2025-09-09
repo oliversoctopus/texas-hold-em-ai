@@ -4,6 +4,7 @@ from poker_ai import PokerAI
 from game_engine import TexasHoldEmTraining
 from player import Player
 from card_deck import Card
+import os
 
 def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50, num_players=4):
     """Automatically tune hyperparameters using self-play training"""
@@ -446,16 +447,52 @@ def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=
     
     return best_model
 
-def evaluate_ai_full(ai_model, num_games=100, num_players=4):
-    """Full evaluation against random players"""
-    print(f"Evaluating AI over {num_games} games...")
+def evaluate_ai_full(ai_model, num_games=100, num_players=4, use_strong_opponents=True):
+    """
+    Full evaluation against either random players or strong opponents
+    
+    Args:
+        ai_model: The model to evaluate
+        num_games: Number of games to play
+        num_players: Number of players per game
+        use_strong_opponents: If True, use strong AI opponents; if False, use random
+    """
+    print(f"Evaluating AI over {num_games} games against {'strong' if use_strong_opponents else 'random'} opponents...")
     
     original_epsilon = ai_model.epsilon
     ai_model.epsilon = 0
     
+    # Try to load strong opponent models if requested
+    strong_opponents = []
+    if use_strong_opponents:
+        # Try to find strong models in current directory
+        strong_model_paths = [
+            'tuned_ai_v2.pth',
+            'tuned_ai_v4.pth', 
+            'poker_ai_tuned.pth',
+            'standard_ai_v3.pth'
+        ]
+        
+        for path in strong_model_paths:
+            if os.path.exists(path):
+                try:
+                    opponent = PokerAI()
+                    opponent.load(path)
+                    opponent.epsilon = 0
+                    strong_opponents.append(opponent)
+                    print(f"  Loaded strong opponent: {path}")
+                except:
+                    pass
+        
+        if not strong_opponents:
+            print("  No strong opponents found, falling back to random")
+            use_strong_opponents = False
+    
     wins = 0
     total_earnings = 0
     games_survived = 0
+    action_distribution = {'fold': 0, 'check': 0, 'call': 0, 'raise': 0, 'all_in': 0}
+    total_actions = 0
     
     for game_num in range(num_games):
         if (game_num + 1) % 20 == 0:
@@ -474,6 +511,10 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4):
         for i in range(num_players):
             if i == trained_idx:
                 ai_models.append(ai_model)
+            elif use_strong_opponents and strong_opponents:
+                # Use a strong opponent
+                opponent = random.choice(strong_opponents)
+                ai_models.append(opponent)
             else:
                 # Random AI (high epsilon, no learning)
                 random_ai = PokerAI(config={'epsilon': 1.0, 'learning_rate': 0,
@@ -482,6 +523,9 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4):
                                            'update_target_every': 1000000,
                                            'min_epsilon': 1.0, 'epsilon_decay': 1.0})
                 ai_models.append(random_ai)
+        
+        # Track actions for this game
+        pre_game_actions = 0
         
         # Play game
         for hand_num in range(50):
@@ -496,9 +540,24 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4):
                 else:
                     player.chips = player_chips[f"Player_{i}"]
             
+            # Track actions before hand
+            if hasattr(training_game, 'action_history'):
+                pre_hand_actions = len(training_game.action_history)
+            
             # Simulate hand
             training_game.reset_game()
             winners = training_game.simulate_hand(ai_models)
+            
+            # Analyze actions taken by test model
+            if hasattr(training_game, 'action_history'):
+                # Only count actions from the test model (player 0)
+                for idx, action in enumerate(training_game.action_history[pre_hand_actions:]):
+                    # Simple heuristic: every num_players actions, one is from test model
+                    if idx % num_players == 0:  
+                        action_name = action.name.lower()
+                        if action_name in action_distribution:
+                            action_distribution[action_name] += 1
+                            total_actions += 1
             
             # Update chips based on winners
             if winners:
@@ -546,12 +605,33 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4):
     print(f"Average earnings: ${avg_earnings:+.0f}")
     print(f"Expected random win rate: {100/num_players:.1f}%")
     
+    # Show action distribution if available
+    if total_actions > 0:
+        print(f"\nAction Distribution:")
+        for action, count in action_distribution.items():
+            pct = (count / total_actions) * 100
+            print(f"  {action.capitalize()}: {pct:.1f}%")
+        
+        # Warn about all-in strategy
+        all_in_pct = (action_distribution['all_in'] / total_actions) * 100
+        if all_in_pct > 50:
+            print("\n⚠️ WARNING: Model exhibits excessive all-in behavior!")
+            print("  This may work against random opponents but will fail against humans.")
+    
     performance_ratio = win_rate / (100/num_players)
-    if performance_ratio > 1.5:
-        print(f"✓ AI is performing {performance_ratio:.1f}x better than random!")
-    elif performance_ratio > 1.2:
-        print(f"✓ AI is performing {performance_ratio:.1f}x better than random")
+    if use_strong_opponents:
+        if performance_ratio > 1.2:
+            print(f"✓ AI performs {performance_ratio:.1f}x better than expected against strong opponents!")
+        elif performance_ratio > 1.0:
+            print(f"✓ AI performs {performance_ratio:.1f}x expected rate against strong opponents")
+        else:
+            print(f"✗ AI needs improvement ({performance_ratio:.1f}x expected against strong opponents)")
     else:
-        print(f"✗ AI needs improvement (only {performance_ratio:.1f}x random performance)")
+        if performance_ratio > 1.5:
+            print(f"✓ AI is performing {performance_ratio:.1f}x better than random!")
+        elif performance_ratio > 1.2:
+            print(f"✓ AI is performing {performance_ratio:.1f}x better than random")
+        else:
+            print(f"✗ AI needs improvement (only {performance_ratio:.1f}x random performance)")
     
     return win_rate, avg_earnings
