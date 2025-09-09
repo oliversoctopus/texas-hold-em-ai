@@ -12,26 +12,110 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
     print(f"Testing {num_configs} configurations with {num_players} players")
     print("=" * 60)
     
-    # Define hyperparameter search space
+    # Define hyperparameter search space including both simple and complex models
     configs = []
     for i in range(num_configs):
-        config = {
-            'learning_rate': random.choice([0.0005, 0.001, 0.0015, 0.002]),
-            'gamma': random.choice([0.92, 0.95, 0.97, 0.99]),
-            'epsilon': random.choice([0.4, 0.5, 0.6]),
-            'hidden_sizes': random.choice([
-                [256, 256], 
-                [512, 256], 
-                [512, 512, 256],
-                [512, 512, 512],
-            ]),
-            'dropout_rate': random.choice([0.15, 0.2, 0.25, 0.3]),
-            'batch_size': random.choice([32, 64, 96]),
-            'update_target_every': random.choice([75, 100, 150]),
-            'min_epsilon': random.choice([0.01, 0.02, 0.05]),
-            'epsilon_decay': random.choice([0.994, 0.995, 0.996, 0.997])
-        }
+        # Randomly choose between simple, medium, and complex configurations
+        complexity = random.choice(['simple', 'medium', 'complex'])
+        
+        if complexity == 'simple':
+            # Simple models with high exploration
+            config = {
+                'learning_rate': random.choice([0.001, 0.0015, 0.002, 0.003]),
+                'gamma': random.choice([0.85, 0.9, 0.95]),
+                'epsilon': random.choice([0.7, 0.8, 0.9]),  # High exploration
+                'hidden_sizes': random.choice([
+                    [64],
+                    [128], 
+                    [128, 64],
+                    [256],
+                ]),
+                'dropout_rate': random.choice([0.05, 0.1, 0.15]),  # Lower dropout for simple models
+                'batch_size': random.choice([16, 32, 48]),  # Smaller batches
+                'update_target_every': random.choice([50, 75, 100]),
+                'min_epsilon': random.choice([0.2, 0.3, 0.4]),  # Higher minimum epsilon
+                'epsilon_decay': random.choice([0.997, 0.998, 0.999])  # Slower decay
+            }
+        elif complexity == 'medium':
+            # Medium complexity models
+            config = {
+                'learning_rate': random.choice([0.0005, 0.001, 0.0015, 0.002]),
+                'gamma': random.choice([0.92, 0.95, 0.97]),
+                'epsilon': random.choice([0.5, 0.6, 0.7]),  # Moderate exploration
+                'hidden_sizes': random.choice([
+                    [256, 128],
+                    [256, 256],
+                    [512, 256],
+                    [384, 192],
+                ]),
+                'dropout_rate': random.choice([0.15, 0.2, 0.25]),
+                'batch_size': random.choice([32, 64, 96]),
+                'update_target_every': random.choice([75, 100, 125]),
+                'min_epsilon': random.choice([0.05, 0.1, 0.15]),  # Moderate minimum
+                'epsilon_decay': random.choice([0.995, 0.996, 0.997])
+            }
+        else:  # complex
+            # Complex models with lower exploration
+            config = {
+                'learning_rate': random.choice([0.0001, 0.0005, 0.001]),
+                'gamma': random.choice([0.95, 0.97, 0.99]),
+                'epsilon': random.choice([0.3, 0.4, 0.5]),  # Lower initial exploration
+                'hidden_sizes': random.choice([
+                    [512, 512, 256],
+                    [512, 512, 512],
+                    [1024, 512, 256],
+                    [768, 384, 192],
+                ]),
+                'dropout_rate': random.choice([0.2, 0.25, 0.3]),
+                'batch_size': random.choice([64, 96, 128]),
+                'update_target_every': random.choice([100, 150, 200]),
+                'min_epsilon': random.choice([0.01, 0.02, 0.05]),  # Low minimum
+                'epsilon_decay': random.choice([0.993, 0.994, 0.995])  # Faster decay
+            }
+        
         configs.append(config)
+    
+    # Ensure we have at least one of each complexity type if we have enough configs
+    if num_configs >= 3:
+        # Override first three configs with one of each type
+        # Simple config
+        configs[0] = {
+            'learning_rate': random.choice([0.002, 0.003]),
+            'gamma': random.choice([0.9, 0.95]),
+            'epsilon': 0.9,  # High exploration like you mentioned
+            'hidden_sizes': [128],  # Simple network like you mentioned
+            'dropout_rate': 0.1,
+            'batch_size': 32,
+            'update_target_every': 75,
+            'min_epsilon': 0.3,  # High minimum like you mentioned
+            'epsilon_decay': 0.999  # Very slow decay like you mentioned
+        }
+        
+        # Medium config
+        configs[1] = {
+            'learning_rate': random.choice([0.001, 0.0015]),
+            'gamma': 0.95,
+            'epsilon': 0.6,
+            'hidden_sizes': [256, 128],
+            'dropout_rate': 0.2,
+            'batch_size': 64,
+            'update_target_every': 100,
+            'min_epsilon': 0.1,
+            'epsilon_decay': 0.996
+        }
+        
+        # Complex config
+        configs[2] = {
+            'learning_rate': random.choice([0.0005, 0.001]),
+            'gamma': 0.97,
+            'epsilon': 0.4,
+            'hidden_sizes': [512, 512, 256],
+            'dropout_rate': 0.25,
+            'batch_size': 96,
+            'update_target_every': 150,
+            'min_epsilon': 0.02,
+            'epsilon_decay': 0.994
+        }
     
     best_config = None
     best_score = -float('inf')
@@ -39,9 +123,18 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
     results = []
     
     for idx, config in enumerate(configs):
-        print(f"\nConfiguration {idx + 1}/{num_configs}")
-        print(f"Testing: LR={config['learning_rate']}, Gamma={config['gamma']}, "
-              f"Hidden={config['hidden_sizes']}, Batch={config['batch_size']}")
+        # Determine complexity for display
+        if len(config['hidden_sizes']) == 1 and config['hidden_sizes'][0] <= 256:
+            complexity = "Simple"
+        elif len(config['hidden_sizes']) <= 2 and max(config['hidden_sizes']) <= 512:
+            complexity = "Medium"
+        else:
+            complexity = "Complex"
+        
+        print(f"\nConfiguration {idx + 1}/{num_configs} ({complexity})")
+        print(f"Testing: Hidden={config['hidden_sizes']}, LR={config['learning_rate']}, "
+              f"Epsilon={config['epsilon']}->{config['min_epsilon']}, "
+              f"Decay={config['epsilon_decay']}")
         
         # Train using self-play with this configuration
         ai_model = train_ai_advanced(
@@ -68,6 +161,7 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
         
         results.append({
             'config': config,
+            'complexity': complexity,
             'win_rate': win_rate,
             'earnings': avg_earnings,
             'score': score
@@ -84,19 +178,35 @@ def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50,
     print("TUNING COMPLETE")
     print("=" * 60)
     print(f"Best configuration found:")
+    print(f"  Hidden layers: {best_config['hidden_sizes']}")
     print(f"  Learning rate: {best_config['learning_rate']}")
     print(f"  Gamma: {best_config['gamma']}")
-    print(f"  Hidden layers: {best_config['hidden_sizes']}")
-    print(f"  Batch size: {best_config['batch_size']}")
+    print(f"  Epsilon: {best_config['epsilon']} -> {best_config['min_epsilon']}")
     print(f"  Epsilon decay: {best_config['epsilon_decay']}")
+    print(f"  Batch size: {best_config['batch_size']}")
     print(f"  Best score: {best_score:.2f}")
     
     # Show all results sorted by score
     print("\nAll configurations ranked:")
     sorted_results = sorted(results, key=lambda x: x['score'], reverse=True)
     for i, result in enumerate(sorted_results, 1):
-        print(f"  {i}. Win rate: {result['win_rate']:.1f}%, "
-              f"Earnings: ${result['earnings']:.0f}, Score: {result['score']:.2f}")
+        print(f"  {i}. {result['complexity']}: Hidden={result['config']['hidden_sizes']}, "
+              f"Win rate={result['win_rate']:.1f}%, "
+              f"Earnings=${result['earnings']:.0f}, Score={result['score']:.2f}")
+    
+    # Show complexity analysis
+    simple_scores = [r['score'] for r in results if r['complexity'] == 'Simple']
+    medium_scores = [r['score'] for r in results if r['complexity'] == 'Medium']
+    complex_scores = [r['score'] for r in results if r['complexity'] == 'Complex']
+    
+    if simple_scores or medium_scores or complex_scores:
+        print("\nComplexity Analysis:")
+        if simple_scores:
+            print(f"  Simple models: Avg score = {np.mean(simple_scores):.2f}")
+        if medium_scores:
+            print(f"  Medium models: Avg score = {np.mean(medium_scores):.2f}")
+        if complex_scores:
+            print(f"  Complex models: Avg score = {np.mean(complex_scores):.2f}")
     
     return best_config, results, best_model
 
