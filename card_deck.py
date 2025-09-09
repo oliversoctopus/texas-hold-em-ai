@@ -75,7 +75,8 @@ def score_five_cards(cards):
         return 9000000 + values[0] * 10000  # Straight flush
     elif counts == [4, 1]:
         quad = [v for v, c in value_counts.items() if c == 4][0]
-        return 8000000 + quad * 10000
+        kicker = [v for v, c in value_counts.items() if c == 1][0]
+        return 8000000 + quad * 10000 + kicker
     elif counts == [3, 2]:
         trip = [v for v, c in value_counts.items() if c == 3][0]
         pair = [v for v, c in value_counts.items() if c == 2][0]
@@ -86,12 +87,16 @@ def score_five_cards(cards):
         return 5000000 + values[0] * 10000
     elif counts == [3, 1, 1]:
         trip = [v for v, c in value_counts.items() if c == 3][0]
-        return 4000000 + trip * 10000
+        kickers = sorted([v for v, c in value_counts.items() if c == 1], reverse=True)
+        return 4000000 + trip * 10000 + kickers[0] * 100 + kickers[1]
     elif counts == [2, 2, 1]:
         pairs = sorted([v for v, c in value_counts.items() if c == 2], reverse=True)
-        return 3000000 + pairs[0] * 10000 + pairs[1] * 100
+        kicker = [v for v, c in value_counts.items() if c == 1][0]
+        # FIX: Include the kicker in the score calculation for two pair
+        return 3000000 + pairs[0] * 10000 + pairs[1] * 100 + kicker
     elif counts == [2, 1, 1, 1]:
         pair = [v for v, c in value_counts.items() if c == 2][0]
-        return 2000000 + pair * 10000
+        kickers = sorted([v for v, c in value_counts.items() if c == 1], reverse=True)
+        return 2000000 + pair * 10000 + kickers[0] * 100 + kickers[1] * 10 + kickers[2]
     else:
         return 1000000 + sum(v * (15 ** (4-i)) for i, v in enumerate(values))
