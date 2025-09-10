@@ -278,9 +278,9 @@ def train_ai_with_strategy_diversity(num_episodes=1000, config=None, verbose=Tru
     ai_model = PokerAI(config=config.copy())
     
     # Warm-up phase against easier opponents
-    if verbose:
-        print("\nPhase 1: Warm-up training...")
-    warmup_training(ai_model, num_episodes=min(100, num_episodes // 10))
+    #if verbose:
+        #print("\nPhase 1: Warm-up training...")
+    #warmup_training(ai_model, num_episodes=min(100, num_episodes // 10))
     
     training_game = TexasHoldEmTraining(num_players=num_players)
     
@@ -448,6 +448,7 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4, use_strong_opponent
         num_players: Number of players per game
         use_strong_opponents: If True, use strong AI opponents; if False, use random
     """
+    #use_strong_opponents=False # temporary testing
     print(f"Evaluating AI over {num_games} games against {'strong' if use_strong_opponents else 'random'} opponents...")
     
     original_epsilon = ai_model.epsilon
