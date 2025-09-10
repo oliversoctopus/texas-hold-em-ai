@@ -5,6 +5,8 @@ from game_engine import TexasHoldEmTraining
 from player import Player
 from card_deck import Card
 import os
+from create_strategy_bots import load_strategy_bots, create_all_strategy_bots
+from game_constants import Action
 
 def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50, num_players=4):
     """Automatically tune hyperparameters using self-play training"""
@@ -239,213 +241,202 @@ def warmup_training(ai_model, num_episodes=100):
     
     print("Warm-up complete!")
 
-def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=4):
-    """Self-play training where multiple AIs with same config train against each other"""
+def train_ai_with_strategy_diversity(num_episodes=1000, config=None, verbose=True, 
+                                    num_players=4, use_strategy_bots=True):
+    """
+    Train AI using diverse strategy bots and reward shaping to prevent all-in spam
+    """
     if verbose:
-        print(f"Training {num_players} AIs using self-play for {num_episodes} episodes...")
+        print(f"Training AI with strategy diversity for {num_episodes} episodes...")
     
     # Use default config if none provided
     if config is None:
         config = {
-            'learning_rate': 0.001,
+            'learning_rate': 0.0005,  # Lower for stability
             'gamma': 0.95,
             'epsilon': 0.5,
-            'hidden_sizes': [512, 512, 256],
-            'dropout_rate': 0.3,
+            'hidden_sizes': [256, 128],  # Moderate complexity
+            'dropout_rate': 0.2,
             'batch_size': 64,
-            'update_target_every': 100,
-            'min_epsilon': 0.01,
-            'epsilon_decay': 0.995
+            'update_target_every': 150,
+            'min_epsilon': 0.05,
+            'epsilon_decay': 0.997
         }
     
-    # Create multiple AIs with the same configuration
-    ai_models = []
-    for i in range(num_players):
-        # Each AI gets the same config but different random initialization
-        ai = PokerAI(config=config.copy())
-        
-        # Slightly vary exploration rates to encourage diversity
-        ai.epsilon = config['epsilon'] * random.uniform(0.9, 1.1)
-        ai.epsilon = min(1.0, max(0.1, ai.epsilon))  # Keep in valid range
-        
-        ai_models.append(ai)
+    # Load or create strategy bots
+    strategy_bots = {}
+    if use_strategy_bots:
+        strategy_bots = load_strategy_bots('strategy_bots')
+        if not strategy_bots:
+            if verbose:
+                print("Strategy bots not found. Creating them now...")
+            create_all_strategy_bots(save_dir='strategy_bots', episodes=200)
+            strategy_bots = load_strategy_bots('strategy_bots')
     
-    # Warm-up phase with random play to establish basic strategies
+    # Create the AI to train
+    ai_model = PokerAI(config=config.copy())
+    
+    # Warm-up phase against easier opponents
     if verbose:
-        print("Warm-up phase...")
-    for ai in ai_models:
-        warmup_training(ai, num_episodes=min(50, num_episodes // 20))
+        print("\nPhase 1: Warm-up training...")
+    warmup_training(ai_model, num_episodes=min(100, num_episodes // 10))
     
     training_game = TexasHoldEmTraining(num_players=num_players)
     
-    # Track wins for each AI
-    wins = {f'AI_{i}': 0 for i in range(num_players)}
-    recent_performances = {f'AI_{i}': [] for i in range(num_players)}
+    wins = 0
+    recent_all_ins = []
+    recent_wins = []
     
-    for episode in range(num_episodes):
-        # Rotate starting positions to ensure fairness
-        rotation = episode % num_players
-        rotated_models = ai_models[rotation:] + ai_models[:rotation]
+    # Curriculum learning phases
+    phases = [
+        (num_episodes // 3, ['conservative', 'balanced']),  # Phase 1
+        (num_episodes // 3, ['conservative', 'balanced', 'aggressive']),  # Phase 2
+        (num_episodes - 2 * (num_episodes // 3), ['conservative', 'balanced', 'aggressive', 'mixed'])  # Phase 3
+    ]
+    
+    episode_count = 0
+    
+    for phase_episodes, opponent_types in phases:
+        phase_num = phases.index((phase_episodes, opponent_types)) + 1
+        if verbose:
+            print(f"\nPhase {phase_num}: Training with {opponent_types}...")
         
-        # Play multiple hands per episode
-        hands_per_episode = 5 if episode < num_episodes // 2 else 10
-        episode_wins = {f'AI_{i}': 0 for i in range(num_players)}
-        
-        for hand in range(hands_per_episode):
-            training_game.reset_game()
-            winners = training_game.simulate_hand(rotated_models)
+        for episode in range(phase_episodes):
+            episode_count += 1
             
-            # Track wins
-            for winner in winners:
-                for i, model in enumerate(rotated_models):
-                    if winner.ai_model == model:
-                        # Account for rotation when tracking wins
-                        original_idx = (i - rotation) % num_players
-                        wins[f'AI_{original_idx}'] += 1
-                        episode_wins[f'AI_{original_idx}'] += 1
-        
-        # Update recent performance tracking
-        for i in range(num_players):
-            recent_performances[f'AI_{i}'].append(episode_wins[f'AI_{i}'] / hands_per_episode)
-            if len(recent_performances[f'AI_{i}']) > 100:
-                recent_performances[f'AI_{i}'].pop(0)
-        
-        # Train all models
-        for i, ai in enumerate(ai_models):
-            if len(ai.memory) > ai.batch_size * 2:
-                # Adaptive training based on performance
-                train_iterations = 5
+            # Build opponent pool
+            ai_models = [ai_model]
+            
+            for i in range(num_players - 1):
+                if strategy_bots and random.random() < 0.7:  # 70% chance to use strategy bot
+                    if 'mixed' in opponent_types:
+                        # Mix all types
+                        bot_type = random.choice(list(strategy_bots.keys()))
+                    else:
+                        # Use specified types
+                        available = [t for t in opponent_types if t in strategy_bots]
+                        if available:
+                            bot_type = random.choice(available)
+                            ai_models.append(strategy_bots[bot_type])
+                        else:
+                            # Fallback to random
+                            random_ai = PokerAI(config={'epsilon': 1.0, 'learning_rate': 0,
+                                                       'gamma': 0, 'hidden_sizes': [64],
+                                                       'dropout_rate': 0, 'batch_size': 1,
+                                                       'update_target_every': 1000000,
+                                                       'min_epsilon': 1.0, 'epsilon_decay': 1.0})
+                            ai_models.append(random_ai)
+                else:
+                    # Use random AI
+                    random_ai = PokerAI(config={'epsilon': random.uniform(0.5, 1.0),
+                                               'learning_rate': 0, 'gamma': 0,
+                                               'hidden_sizes': [64], 'dropout_rate': 0,
+                                               'batch_size': 1, 'update_target_every': 1000000,
+                                               'min_epsilon': 1.0, 'epsilon_decay': 1.0})
+                    ai_models.append(random_ai)
+            
+            # Rotate positions
+            rotation = episode % num_players
+            ai_models = ai_models[rotation:] + ai_models[:rotation]
+            
+            # Track all-ins this episode
+            episode_all_ins = 0
+            
+            # Play multiple hands
+            hands_per_episode = 5
+            episode_wins = 0
+            
+            for hand in range(hands_per_episode):
+                training_game.reset_game()
+                winners = training_game.simulate_hand(ai_models)
                 
-                # Train more if this AI is struggling
-                if len(recent_performances[f'AI_{i}']) >= 20:
-                    recent_avg = np.mean(recent_performances[f'AI_{i}'][-20:])
-                    if recent_avg < 1.0 / num_players:  # Below expected win rate
+                # Count all-ins
+                if hasattr(training_game, 'action_history'):
+                    for action in training_game.action_history:
+                        if action == Action.ALL_IN:
+                            episode_all_ins += 1
+                
+                # Apply reward shaping
+                for i, model in enumerate(ai_models):
+                    if model == ai_model:
+                        player = training_game.players[i]
+                        
+                        # Calculate shaped reward
+                        base_reward = 0
+                        if player in winners:
+                            base_reward = 1.0
+                            episode_wins += 1
+                        else:
+                            base_reward = -0.5
+                        
+                        # Penalize all-ins heavily
+                        if episode_all_ins > 0:
+                            all_in_penalty = -0.3 * min(episode_all_ins, 5)  # Cap penalty
+                            base_reward += all_in_penalty
+                        
+                        # Update last experience with shaped reward
+                        if len(ai_model.memory.buffer) > 0:
+                            last_exp = ai_model.memory.buffer[-1]
+                            # Check if last action was all-in
+                            if last_exp.action == Action.ALL_IN.value:
+                                base_reward -= 0.5  # Extra penalty for this AI going all-in
+                            
+                            ai_model.memory.buffer[-1] = ai_model.memory.Experience(
+                                last_exp.state, last_exp.action, base_reward,
+                                last_exp.next_state, last_exp.done
+                            )
+            
+            recent_all_ins.append(episode_all_ins)
+            recent_wins.append(episode_wins / hands_per_episode)
+            
+            # Keep recent history bounded
+            if len(recent_all_ins) > 100:
+                recent_all_ins.pop(0)
+                recent_wins.pop(0)
+            
+            # Train the model
+            if len(ai_model.memory) > ai_model.batch_size * 2:
+                # More training iterations if doing poorly
+                train_iterations = 5
+                if len(recent_wins) > 20:
+                    recent_win_rate = np.mean(recent_wins[-20:])
+                    if recent_win_rate < 0.2:  # Less than 20% win rate
                         train_iterations = 8
-                    elif recent_avg < 0.5 / num_players:  # Way below expected
-                        train_iterations = 10
                 
                 for _ in range(train_iterations):
-                    ai.replay()
+                    ai_model.replay()
             
             # Decay epsilon
-            ai.decay_epsilon()
-        
-        # Periodic status update
-        if verbose and episode % 100 == 0:
-            print(f"\nEpisode {episode}/{num_episodes}")
-            for i in range(num_players):
-                if recent_performances[f'AI_{i}']:
-                    recent_win_rate = np.mean(recent_performances[f'AI_{i}'][-20:]) * 100
-                    print(f"  AI_{i}: Recent win rate: {recent_win_rate:.1f}%, "
-                          f"Epsilon: {ai_models[i].epsilon:.3f}")
+            ai_model.decay_epsilon()
+            
+            # Progress update
+            if verbose and episode_count % 100 == 0:
+                avg_all_ins = np.mean(recent_all_ins[-50:]) if recent_all_ins else 0
+                avg_wins = np.mean(recent_wins[-50:]) if recent_wins else 0
+                print(f"  Episode {episode_count}/{num_episodes}")
+                print(f"    Win rate: {avg_wins*100:.1f}%")
+                print(f"    All-ins per episode: {avg_all_ins:.1f}")
+                print(f"    Epsilon: {ai_model.epsilon:.3f}")
+                
+                # Warn if still using too many all-ins
+                if avg_all_ins > 10:
+                    print("    ⚠️ Still using excessive all-ins!")
     
     if verbose:
-        print(f"\nSelf-play training complete!")
-        print("Win distribution:")
-        total_wins = sum(wins.values())
-        for i in range(num_players):
-            win_pct = (wins[f'AI_{i}'] / total_wins * 100) if total_wins > 0 else 0
-            print(f"  AI_{i}: {wins[f'AI_{i}']} wins ({win_pct:.1f}%)")
+        print(f"\nTraining complete!")
+        final_all_ins = np.mean(recent_all_ins[-50:]) if recent_all_ins else 0
+        final_wins = np.mean(recent_wins[-50:]) if recent_wins else 0
+        print(f"Final stats: Win rate={final_wins*100:.1f}%, All-ins/episode={final_all_ins:.1f}")
     
-    # Evaluate all models against each other and random opponents
-    if verbose:
-        print("\n" + "=" * 60)
-        print("EVALUATING ALL SELF-PLAY MODELS")
-        print("=" * 60)
-    
-    best_model = None
-    best_score = -float('inf')
-    best_idx = -1
-    evaluation_results = []
-    
-    for i, model in enumerate(ai_models):
-        if verbose:
-            print(f"\nEvaluating AI_{i}...")
-        
-        # Save original epsilon
-        original_epsilon = model.epsilon
-        model.epsilon = 0  # No exploration during evaluation
-        
-        # Test against random opponents
-        if verbose:
-            print(f"  Testing against random opponents...")
-        random_win_rate, random_earnings = evaluate_ai_full(
-            model, 
-            num_games=30, 
-            num_players=num_players
-        )
-        
-        # Test against other self-play models (round-robin)
-        if verbose:
-            print(f"  Testing against other trained models...")
-        self_play_wins = 0
-        self_play_games = 20
-        
-        for game_num in range(self_play_games):
-            # Create a game with this model and other trained models
-            test_game = TexasHoldEmTraining(num_players=num_players)
-            
-            # Mix of this model and other trained models
-            test_models = [model] + random.sample([m for j, m in enumerate(ai_models) if j != i], 
-                                                  min(num_players - 1, len(ai_models) - 1))
-            # Fill remaining slots with random models if needed
-            while len(test_models) < num_players:
-                test_models.append(model)  # Add more copies of the model being tested
-            
-            random.shuffle(test_models)
-            
-            test_game.reset_game()
-            winners = test_game.simulate_hand(test_models)
-            
-            for winner in winners:
-                if winner.ai_model == model:
-                    self_play_wins += 1
-        
-        self_play_win_rate = (self_play_wins / self_play_games) * 100
-        
-        # Combined score: weight both random and self-play performance
-        # Higher weight on random performance as it shows generalization
-        score = (random_win_rate * 0.6) + (self_play_win_rate * 0.4) + (random_earnings / 100)
-        
-        evaluation_results.append({
-            'model_idx': i,
-            'random_win_rate': random_win_rate,
-            'random_earnings': random_earnings,
-            'self_play_win_rate': self_play_win_rate,
-            'score': score
-        })
-        
-        if verbose:
-            print(f"  AI_{i} Results:")
-            print(f"    vs Random: Win rate={random_win_rate:.1f}%, Earnings=${random_earnings:.0f}")
-            print(f"    vs Self-play: Win rate={self_play_win_rate:.1f}%")
-            print(f"    Combined Score: {score:.2f}")
-        
-        if score > best_score:
-            best_score = score
-            best_model = model
-            best_idx = i
-        
-        # Restore original epsilon
-        model.epsilon = original_epsilon
-    
-    if verbose:
-        print("\n" + "=" * 60)
-        print(f"BEST MODEL: AI_{best_idx} with score {best_score:.2f}")
-        print("=" * 60)
-        
-        # Show ranking
-        print("\nAll models ranked by score:")
-        sorted_results = sorted(evaluation_results, key=lambda x: x['score'], reverse=True)
-        for rank, result in enumerate(sorted_results, 1):
-            print(f"  {rank}. AI_{result['model_idx']}: Score={result['score']:.2f}, "
-                  f"Random WR={result['random_win_rate']:.1f}%, "
-                  f"Self-play WR={result['self_play_win_rate']:.1f}%")
-    
-    # Ensure the best model has the correct config
-    best_model.config = config
-    
-    return best_model
+    return ai_model
+
+
+# Update the original train_ai_advanced to use the new version
+def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=4):
+    """
+    Wrapper for backwards compatibility - now uses strategy diversity training
+    """
+    return train_ai_with_strategy_diversity(num_episodes, config, verbose, num_players)
 
 def evaluate_ai_full(ai_model, num_games=100, num_players=4, use_strong_opponents=True):
     """

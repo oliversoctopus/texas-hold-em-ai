@@ -178,25 +178,23 @@ class AdvancedEvaluator:
             
             # Determine winners
             winners = game.determine_winners(verbose=False)
-            
-            # Track showdowns
+
+            # Track showdowns BEFORE distributing pot
             active_at_showdown = [p for p in game.players if not p.folded]
             if len(active_at_showdown) > 1:
                 total_showdowns += 1
                 if game.players[test_position] in winners:
                     test_showdown_wins += 1
-            
+
             # Distribute pot
             game.distribute_pot(winners, verbose=False)
-            
-            # Track hand winner
-            if winners:
-                for winner in winners:
-                    winner_idx = game.players.index(winner)
-                    hand_winners.append(winner_idx)
-                    if winner_idx == test_position:
-                        test_hand_wins += 1
-            
+
+            # Track hand winner - only count once per hand
+            hand_won_by_test = False
+            if winners and game.players[test_position] in winners:
+                hand_won_by_test = True
+                test_hand_wins += 1
+
             hands_played += 1
             
             # Move dealer button
@@ -237,7 +235,7 @@ class AdvancedEvaluator:
                                          num_games: int = 100,
                                          num_players: int = 6,
                                          verbose: bool = True,
-                                         max_hands_per_game: int = 50) -> Dict:
+                                         max_hands_per_game: int = 200) -> Dict:
         """
         Evaluate a model against strong, trained opponents
         
@@ -468,7 +466,7 @@ def evaluate_all_models(model_paths: List[str],
                         benchmark_models: List[str] = None,
                         num_games: int = 100,
                         show_position_stats: bool = True,
-                        max_hands_per_game: int = 50) -> None:
+                        max_hands_per_game: int = 200) -> None:
     """
     Evaluate multiple models and rank them
     """
@@ -658,7 +656,8 @@ def run_advanced_evaluation():
         'best_checkpoint.pth',
         'best_final.pth',
         'best_checkpoint_2.pth',
-        'best_final_2.pth'
+        'best_final_2.pth',
+        'simple_ai.pth'
     ]
     
     print("\n\nEvaluating all models against strong opponents...")

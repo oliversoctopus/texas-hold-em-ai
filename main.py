@@ -5,6 +5,7 @@ from game_engine import TexasHoldEm
 from training import hyperparameter_tuning, train_ai_advanced, evaluate_ai_full
 from player import Player
 from advanced_evaluation import AdvancedEvaluator, evaluate_all_models
+from create_strategy_bots import create_all_strategy_bots, load_strategy_bots
 
 def main():
     """Main game loop"""
@@ -13,11 +14,13 @@ def main():
     print("=" * 60)
     
     print("\n1. Train new AI (standard)")
-    print("2. Train with hyperparameter tuning (recommended)")
-    print("3. Load existing AI")
-    print("4. Play without AI")
+    print("2. Train with hyperparameter tuning")
+    print("3. Train with strategy diversity (anti all-in)")
+    print("4. Create strategy bots")
+    print("5. Load existing AI")
+    print("6. Play without AI")
     
-    choice = input("\nChoose option (1-4): ")
+    choice = input("\nChoose option (1-6): ")
     
     ai_model = None
     
@@ -32,14 +35,7 @@ def main():
         # Evaluate
         eval_choice = input("\nEvaluate AI? (y/n): ")
         if eval_choice.lower() == 'y':
-            eval_choice = input("\nEvaluation type: (1) Random opponents, (2) Strong opponents, (3) Comprehensive: ")
-            if eval_choice == '1':
-                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=False)
-            elif eval_choice == '2':
-                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
-            elif eval_choice == '3':
-                evaluator = AdvancedEvaluator(['tuned_ai_v2.pth', 'tuned_ai_v4.pth', 'poker_ai_tuned.pth'])
-                evaluator.comprehensive_evaluation(ai_model, model_name="Current Model", num_games=200)
+            evaluate_ai_full(ai_model, num_games=100, num_players=players)
         
         # Save
         save_choice = input("\nSave model? (y/n): ")
@@ -245,6 +241,65 @@ def main():
             print(f"Final model saved to {filename}")
     
     elif choice == '3':
+        print("\nTraining with strategy diversity (prevents all-in spam)")
+        
+        # Check if strategy bots exist
+        strategy_bots = load_strategy_bots('strategy_bots')
+        if not strategy_bots:
+            create_bots = input("Strategy bots not found. Create them now? (y/n): ")
+            if create_bots.lower() == 'y':
+                print("\nCreating strategy bots...")
+                create_all_strategy_bots(save_dir='strategy_bots', episodes=300)
+            else:
+                print("Training without strategy bots...")
+        
+        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
+        players = int(input("Number of players for training (2-6): ") or "4")
+        
+        # Configuration for balanced play
+        config = {
+            'learning_rate': 0.0005,
+            'gamma': 0.95,
+            'epsilon': 0.5,
+            'hidden_sizes': [256, 128],
+            'dropout_rate': 0.2,
+            'batch_size': 64,
+            'update_target_every': 150,
+            'min_epsilon': 0.05,
+            'epsilon_decay': 0.997
+        }
+        
+        print(f"\nTraining with strategy diversity...")
+        from training import train_ai_with_strategy_diversity
+        ai_model = train_ai_with_strategy_diversity(
+            num_episodes=episodes, 
+            config=config,
+            num_players=players,
+            use_strategy_bots=True
+        )
+        
+        # Evaluate
+        eval_choice = input("\nEvaluate AI? (y/n): ")
+        if eval_choice.lower() == 'y':
+            # Test against strategy bots
+            print("\nEvaluating against strategy bots...")
+            evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+        
+        # Save
+        save_choice = input("\nSave model? (y/n): ")
+        if save_choice.lower() == 'y':
+            filename = input("Filename (default: balanced_poker_ai.pth): ") or "balanced_poker_ai.pth"
+            ai_model.save(filename)
+            print(f"Model saved to {filename}")
+    
+    elif choice == '4':
+        print("\nCreating strategy bots...")
+        episodes = int(input("Training episodes per bot (200-500 recommended): ") or "300")
+        create_all_strategy_bots(save_dir='strategy_bots', episodes=episodes)
+        print("\nStrategy bots created in strategy_bots/ directory")
+        return
+    
+    elif choice == '5':
         filename = input("Model filename (default: poker_ai.pth): ") or "poker_ai.pth"
         ai_model = PokerAI()
         try:
@@ -256,13 +311,19 @@ def main():
             # Option to evaluate
             eval_choice = input("\nEvaluate loaded model? (y/n): ")
             if eval_choice.lower() == 'y':
-                min_players = int(input("Minimum number of players for evaluation (2-6): "))
-                max_players = int(input(f"Max number of players for evaluation ({min_players}-6): "))
-                for i in range(min_players, max_players+1):
-                    evaluate_ai_full(ai_model, num_games=100, num_players=i)
+                players = int(input("Number of players for evaluation (2-6): ") or "6")
+                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting with untrained AI")
+    
+    elif choice == '6':
+        print("Playing without AI training")
+        ai_model = None
+    
+    else:
+        print("Invalid choice, playing without AI")
+        ai_model = None
     
     # Play game
     play_choice = input("\nPlay interactive game? (y/n): ")
