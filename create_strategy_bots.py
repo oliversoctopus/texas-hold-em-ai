@@ -9,6 +9,7 @@ import numpy as np
 from poker_ai import PokerAI
 from game_engine import TexasHoldEmTraining
 from game_constants import Action
+from neural_network import Experience  # Import Experience from neural_network
 
 def train_conservative_bot(episodes=500):
     """Train a bot that plays tight and rarely goes all-in"""
@@ -81,7 +82,7 @@ def train_conservative_bot(episodes=500):
                     # Store experience with shaped reward
                     if len(bot.memory.buffer) > 0:
                         last_exp = bot.memory.buffer[-1]
-                        bot.memory.buffer[-1] = bot.memory.Experience(
+                        bot.memory.buffer[-1] = Experience(
                             last_exp.state, last_exp.action, reward,
                             last_exp.next_state, last_exp.done
                         )
@@ -172,7 +173,7 @@ def train_aggressive_bot(episodes=500):
                     # Store experience with shaped reward
                     if len(bot.memory.buffer) > 0:
                         last_exp = bot.memory.buffer[-1]
-                        bot.memory.buffer[-1] = bot.memory.Experience(
+                        bot.memory.buffer[-1] = Experience(
                             last_exp.state, last_exp.action, reward,
                             last_exp.next_state, last_exp.done
                         )
@@ -271,7 +272,7 @@ def train_balanced_bot(episodes=500):
                     # Store experience with shaped reward
                     if len(bot.memory.buffer) > 0:
                         last_exp = bot.memory.buffer[-1]
-                        bot.memory.buffer[-1] = bot.memory.Experience(
+                        bot.memory.buffer[-1] = Experience(
                             last_exp.state, last_exp.action, reward,
                             last_exp.next_state, last_exp.done
                         )

@@ -7,6 +7,7 @@ from card_deck import Card
 import os
 from create_strategy_bots import load_strategy_bots, create_all_strategy_bots
 from game_constants import Action
+from neural_network import Experience
 
 def hyperparameter_tuning(num_configs=5, episodes_per_config=200, eval_games=50, num_players=4):
     """Automatically tune hyperparameters using self-play training"""
@@ -373,7 +374,6 @@ def train_ai_with_strategy_diversity(num_episodes=1000, config=None, verbose=Tru
                         if episode_all_ins > 0:
                             all_in_penalty = -0.3 * min(episode_all_ins, 5)  # Cap penalty
                             base_reward += all_in_penalty
-                        
                         # Update last experience with shaped reward
                         if len(ai_model.memory.buffer) > 0:
                             last_exp = ai_model.memory.buffer[-1]
@@ -381,7 +381,7 @@ def train_ai_with_strategy_diversity(num_episodes=1000, config=None, verbose=Tru
                             if last_exp.action == Action.ALL_IN.value:
                                 base_reward -= 0.5  # Extra penalty for this AI going all-in
                             
-                            ai_model.memory.buffer[-1] = ai_model.memory.Experience(
+                            ai_model.memory.buffer[-1] = Experience(  # Not ai_model.memory.Experience
                                 last_exp.state, last_exp.action, base_reward,
                                 last_exp.next_state, last_exp.done
                             )
