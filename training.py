@@ -432,11 +432,135 @@ def train_ai_with_strategy_diversity(num_episodes=1000, config=None, verbose=Tru
 
 
 # Update the original train_ai_advanced to use the new version
+def train_ai_vs_strong_opponents(num_episodes=1000, config=None, verbose=True, num_players=4):
+    """
+    Train AI against strong pre-trained models as opponents
+    """
+    if verbose:
+        print(f"Training AI against strong opponents for {num_episodes} episodes...")
+    
+    # Use default config if none provided
+    if config is None:
+        config = {
+            'learning_rate': 0.001,
+            'gamma': 0.95,
+            'epsilon': 0.6,  # Higher exploration when facing strong opponents
+            'hidden_sizes': [512, 256, 128],  # Larger network to compete
+            'dropout_rate': 0.2,
+            'batch_size': 64,
+            'update_target_every': 100,
+            'min_epsilon': 0.05,
+            'epsilon_decay': 0.998
+        }
+    
+    # Load strong opponent models
+    strong_opponents = []
+    strong_model_paths = [
+        'tuned_ai_v4.pth',
+        'tuned_ai_v2.pth', 
+        'poker_ai_tuned.pth',
+        'standard_ai_v3.pth',
+        'standard_ai_v4.pth',
+        'balanced_ai_v3.pth',
+        'best_final_2.pth',
+        'opponent_eval_v2.pth'
+    ]
+    
+    for path in strong_model_paths:
+        if os.path.exists(path):
+            try:
+                opponent = PokerAI()
+                opponent.load(path)
+                opponent.epsilon = 0.05  # Small exploration for variety
+                strong_opponents.append((opponent, path))
+                if verbose:
+                    print(f"  Loaded strong opponent: {path}")
+            except Exception as e:
+                if verbose:
+                    print(f"  Could not load {path}: {e}")
+    
+    if not strong_opponents:
+        print("No strong opponents found! Falling back to strategy diversity training.")
+        return train_ai_with_strategy_diversity(num_episodes, config, verbose, num_players)
+    
+    if verbose:
+        print(f"  Training against {len(strong_opponents)} strong opponents")
+    
+    # Create the AI to train
+    ai_model = PokerAI(config=config.copy())
+    training_game = TexasHoldEmTraining(num_players=num_players)
+    
+    wins = 0
+    recent_wins = []
+    phase_size = num_episodes // 4
+    
+    for episode in range(num_episodes):
+        # Progressive difficulty - start with weaker opponents, add stronger ones
+        current_phase = episode // phase_size
+        available_opponents = strong_opponents[:min(len(strong_opponents), current_phase + 2)]
+        
+        # Select opponents for this episode
+        opponents = []
+        for i in range(num_players - 1):
+            if available_opponents:
+                opponent, name = random.choice(available_opponents)
+                opponents.append(opponent)
+            else:
+                # Fallback random opponent
+                random_config = {
+                    'epsilon': 0.8, 'learning_rate': 0, 'gamma': 0,
+                    'hidden_sizes': [128], 'dropout_rate': 0, 'batch_size': 1,
+                    'update_target_every': 1000000, 'min_epsilon': 0.8, 'epsilon_decay': 1.0
+                }
+                opponents.append(PokerAI(config=random_config))
+        
+        # Play multiple hands per episode
+        episode_wins = 0
+        for hand in range(8):  # More hands per episode for stronger learning
+            training_game.reset_game()
+            all_models = [ai_model] + opponents
+            random.shuffle(all_models)
+            
+            winners = training_game.simulate_hand(all_models)
+            
+            # Check if our AI won
+            ai_position = all_models.index(ai_model)
+            ai_player = training_game.players[ai_position]
+            if ai_player in winners:
+                episode_wins += 1
+                wins += 1
+        
+        # Train the AI
+        if len(ai_model.memory) > ai_model.batch_size:
+            for _ in range(3):  # More training per episode
+                ai_model.replay()
+        
+        ai_model.decay_epsilon()
+        
+        # Track recent performance
+        recent_wins.append(episode_wins)
+        if len(recent_wins) > 100:
+            recent_wins.pop(0)
+        
+        # Progress reporting
+        if verbose and episode % 100 == 0:
+            recent_wr = np.mean(recent_wins) * 100 / 8 if recent_wins else 0
+            print(f"  Episode {episode}/{num_episodes}, Win Rate: {recent_wr:.1f}%, Epsilon: {ai_model.epsilon:.3f}")
+    
+    # Final stats
+    overall_win_rate = (wins / (num_episodes * 8)) * 100
+    if verbose:
+        print(f"\nTraining complete!")
+        print(f"Overall win rate vs strong opponents: {overall_win_rate:.1f}%")
+        print(f"Final epsilon: {ai_model.epsilon:.3f}")
+    
+    return ai_model
+
 def train_ai_advanced(num_episodes=1000, config=None, verbose=True, num_players=4):
     """
-    Wrapper for backwards compatibility - now uses strategy diversity training
+    Wrapper for backwards compatibility - now uses strong opponent training
     """
-    return train_ai_with_strategy_diversity(num_episodes, config, verbose, num_players)
+    return train_ai_vs_strong_opponents(num_episodes, config, verbose, num_players)
 
 def evaluate_ai_full(ai_model, num_games=100, num_players=4, use_strong_opponents=True):
     """

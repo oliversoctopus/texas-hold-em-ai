@@ -16,11 +16,12 @@ def main():
     print("\n1. Train new AI (standard)")
     print("2. Train with hyperparameter tuning")
     print("3. Train with strategy diversity (anti all-in)")
-    print("4. Create strategy bots")
-    print("5. Load existing AI")
-    print("6. Play without AI")
+    print("4. Train against strong opponents")
+    print("5. Create strategy bots")
+    print("6. Load existing AI")
+    print("7. Play without AI")
     
-    choice = input("\nChoose option (1-6): ")
+    choice = input("\nChoose option (1-7): ")
     
     ai_model = None
     
@@ -222,7 +223,7 @@ def main():
             ai_model = best_final_model
         
         # Full evaluation
-        print("\nPerforming final evaluation...")
+        eval_choice = input("\nEvaluate final model? (y/n): ")
         if eval_choice.lower() == 'y':
             eval_choice = input("\nEvaluation type: (1) Random opponents, (2) Strong opponents, (3) Comprehensive: ")
             if eval_choice == '1':
@@ -293,13 +294,37 @@ def main():
             print(f"Model saved to {filename}")
     
     elif choice == '4':
+        print("\nTraining against strong opponents")
+        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1500")
+        players = int(input("Number of players for training (2-6): ") or "4")
+        
+        print(f"\nTraining against pre-trained strong opponents...")
+        from training import train_ai_vs_strong_opponents
+        ai_model = train_ai_vs_strong_opponents(
+            num_episodes=episodes,
+            num_players=players
+        )
+        
+        # Evaluate
+        eval_choice = input("\nEvaluate AI? (y/n): ")
+        if eval_choice.lower() == 'y':
+            evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+        
+        # Save
+        save_choice = input("\nSave model? (y/n): ")
+        if save_choice.lower() == 'y':
+            filename = input("Filename (default: vs_strong_ai.pth): ") or "vs_strong_ai.pth"
+            ai_model.save(filename)
+            print(f"Model saved to {filename}")
+    
+    elif choice == '5':
         print("\nCreating strategy bots...")
         episodes = int(input("Training episodes per bot (200-500 recommended): ") or "300")
         create_all_strategy_bots(save_dir='strategy_bots', episodes=episodes)
         print("\nStrategy bots created in strategy_bots/ directory")
         return
     
-    elif choice == '5':
+    elif choice == '6':
         filename = input("Model filename (default: poker_ai.pth): ") or "poker_ai.pth"
         ai_model = PokerAI()
         try:
@@ -317,7 +342,7 @@ def main():
             print(f"Could not load model: {e}")
             print("Starting with untrained AI")
     
-    elif choice == '6':
+    elif choice == '7':
         print("Playing without AI training")
         ai_model = None
     
