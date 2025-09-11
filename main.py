@@ -13,19 +13,83 @@ def main():
     print("TEXAS HOLD'EM with Advanced PyTorch AI")
     print("=" * 60)
     
-    print("\n1. Train new AI (standard)")
-    print("2. Train with hyperparameter tuning")
-    print("3. Train with strategy diversity (anti all-in)")
-    print("4. Train against strong opponents")
-    print("5. Create strategy bots")
-    print("6. Load existing AI")
-    print("7. Play without AI")
+    print("\n1. Train CFR AI (Counterfactual Regret Minimization)")
+    print("2. Train new AI (standard DQN)")
+    print("3. Train with hyperparameter tuning")
+    print("4. Train with strategy diversity (anti all-in)")
+    print("5. Train against strong opponents")
+    print("6. Create strategy bots")
+    print("7. Load existing AI")
+    print("8. Play without AI")
     
-    choice = input("\nChoose option (1-7): ")
+    choice = input("\nChoose option (1-8): ")
     
     ai_model = None
     
     if choice == '1':
+        print("\nCFR (Counterfactual Regret Minimization) Training")
+        print("This uses game theory optimal strategies like real poker AIs!")
+        
+        iterations = int(input("CFR iterations (10000-100000 recommended): ") or "25000")
+        players = int(input("Number of players for games (2-6): ") or "4")
+        
+        print(f"\nTraining CFR AI with {iterations} iterations...")
+        from cfr_player import train_cfr_ai, evaluate_cfr_ai
+        
+        cfr_ai = train_cfr_ai(
+            iterations=iterations,
+            num_players=players,
+            verbose=True
+        )
+        
+        # Evaluate CFR AI
+        eval_choice = input("\nEvaluate CFR AI? (y/n): ")
+        if eval_choice.lower() == 'y':
+            evaluate_cfr_ai(cfr_ai, num_games=100, num_players=players)
+        
+        # Save CFR model
+        save_choice = input("\nSave CFR model? (y/n): ")
+        if save_choice.lower() == 'y':
+            filename = input("Filename (default: cfr_poker_ai.pkl): ") or "cfr_poker_ai.pkl"
+            cfr_ai.save(filename)
+            print(f"CFR model saved to {filename}")
+        
+        # Convert CFR to compatible format for gameplay
+        print("\nCreating CFR player for gameplay...")
+        from cfr_player import CFRPlayer
+        cfr_player = CFRPlayer(cfr_ai)
+        
+        # Create a wrapper that looks like the old AI for compatibility
+        class CFRWrapper:
+            def __init__(self, cfr_player):
+                self.cfr_player = cfr_player
+                self.epsilon = 0  # CFR doesn't use epsilon
+                
+            def choose_action(self, state, valid_actions):
+                # Convert state to CFR format
+                game_state = {
+                    'hole_cards': getattr(state, 'hole_cards', []),
+                    'community_cards': getattr(state, 'community_cards', []),
+                    'pot_size': getattr(state, 'pot_size', 0),
+                    'to_call': getattr(state, 'to_call', 0),
+                    'stack_size': getattr(state, 'stack_size', 1000),
+                    'position': getattr(state, 'position', 0),
+                    'num_players': getattr(state, 'num_players', 4),
+                    'action_history': getattr(state, 'action_history', [])
+                }
+                return self.cfr_player.choose_action(game_state)
+            
+            def get_raise_size(self, state):
+                game_state = {
+                    'pot_size': getattr(state, 'pot_size', 0),
+                    'position': getattr(state, 'position', 0),
+                    'num_players': getattr(state, 'num_players', 4)
+                }
+                return self.cfr_player.get_raise_size(game_state)
+        
+        ai_model = CFRWrapper(cfr_player)
+        
+    elif choice == '2':
         print("\nStandard training using self-play")
         episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
         players = int(input("Number of players for training (2-6): ") or "4")
@@ -45,7 +109,7 @@ def main():
             ai_model.save(filename)
             print(f"Model saved to {filename}")
 
-    elif choice == '2':
+    elif choice == '3':
         print("\nHyperparameter tuning with self-play training")
         print("This will test multiple configurations to find the best one.")
         
@@ -241,7 +305,7 @@ def main():
             ai_model.save(filename)
             print(f"Final model saved to {filename}")
     
-    elif choice == '3':
+    elif choice == '4':
         print("\nTraining with strategy diversity (prevents all-in spam)")
         
         # Check if strategy bots exist
@@ -293,7 +357,7 @@ def main():
             ai_model.save(filename)
             print(f"Model saved to {filename}")
     
-    elif choice == '4':
+    elif choice == '5':
         print("\nTraining against strong opponents")
         episodes = int(input("Training episodes (1000-3000 recommended): ") or "1500")
         players = int(input("Number of players for training (2-6): ") or "4")
@@ -308,7 +372,7 @@ def main():
         # Evaluate
         eval_choice = input("\nEvaluate AI? (y/n): ")
         if eval_choice.lower() == 'y':
-            evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+            evaluate_ai_full(ai_model, num_games=10000, num_players=players, use_strong_opponents=True)
         
         # Save
         save_choice = input("\nSave model? (y/n): ")
@@ -317,14 +381,14 @@ def main():
             ai_model.save(filename)
             print(f"Model saved to {filename}")
     
-    elif choice == '5':
+    elif choice == '6':
         print("\nCreating strategy bots...")
         episodes = int(input("Training episodes per bot (200-500 recommended): ") or "300")
         create_all_strategy_bots(save_dir='strategy_bots', episodes=episodes)
         print("\nStrategy bots created in strategy_bots/ directory")
         return
     
-    elif choice == '6':
+    elif choice == '7':
         filename = input("Model filename (default: poker_ai.pth): ") or "poker_ai.pth"
         ai_model = PokerAI()
         try:
@@ -342,7 +406,7 @@ def main():
             print(f"Could not load model: {e}")
             print("Starting with untrained AI")
     
-    elif choice == '7':
+    elif choice == '8':
         print("Playing without AI training")
         ai_model = None
     

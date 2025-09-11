@@ -3,3 +3,4 @@ backups/
 __pycache__
 eval_all_models.py
 debug_evaluation.py
+*.pkl
