@@ -389,22 +389,84 @@ def main():
         return
     
     elif choice == '7':
-        filename = input("Model filename (default: poker_ai.pth): ") or "poker_ai.pth"
-        ai_model = PokerAI()
-        try:
-            ai_model.load(filename)
-            print(f"Model loaded from {filename}")
-            ai_model.epsilon = 0  # No exploration during play
-            print(f"Config of loaded model: {ai_model.config}")
-            
-            # Option to evaluate
-            eval_choice = input("\nEvaluate loaded model? (y/n): ")
-            if eval_choice.lower() == 'y':
-                players = int(input("Number of players for evaluation (2-6): ") or "6")
-                evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
-        except Exception as e:
-            print(f"Could not load model: {e}")
-            print("Starting with untrained AI")
+        filename = input("Model filename (.pth for DQN, .pkl for CFR, default: poker_ai.pth): ") or "poker_ai.pth"
+        
+        # Check if it's a CFR model (.pkl) or DQN model (.pth)
+        if filename.endswith('.pkl'):
+            # Load CFR model
+            try:
+                from cfr_poker import CFRPokerAI
+                from cfr_player import CFRPlayer
+                
+                print(f"Loading CFR model from {filename}...")
+                cfr_ai = CFRPokerAI()
+                cfr_ai.load(filename)
+                print(f"CFR model loaded from {filename}")
+                print(f"Information sets learned: {len(cfr_ai.nodes)}")
+                
+                # Create CFR player wrapper
+                cfr_player = CFRPlayer(cfr_ai)
+                
+                # Option to evaluate CFR model
+                eval_choice = input("\nEvaluate CFR model? (y/n): ")
+                if eval_choice.lower() == 'y':
+                    players = int(input("Number of players for evaluation (2-6): ") or "6")
+                    from cfr_player import evaluate_cfr_ai
+                    evaluate_cfr_ai(cfr_ai, num_games=50, num_players=players)
+                
+                # Create wrapper for gameplay compatibility
+                class CFRWrapper:
+                    def __init__(self, cfr_player):
+                        self.cfr_player = cfr_player
+                        self.epsilon = 0  # CFR doesn't use epsilon
+                        
+                    def choose_action(self, state, valid_actions):
+                        # Convert state to CFR format
+                        game_state = {
+                            'hole_cards': getattr(state, 'hole_cards', []),
+                            'community_cards': getattr(state, 'community_cards', []),
+                            'pot_size': getattr(state, 'pot_size', 0),
+                            'to_call': getattr(state, 'to_call', 0),
+                            'stack_size': getattr(state, 'stack_size', 1000),
+                            'position': getattr(state, 'position', 0),
+                            'num_players': getattr(state, 'num_players', 4),
+                            'action_history': getattr(state, 'action_history', [])
+                        }
+                        return self.cfr_player.choose_action(game_state)
+                    
+                    def get_raise_size(self, state):
+                        game_state = {
+                            'pot_size': getattr(state, 'pot_size', 0),
+                            'position': getattr(state, 'position', 0),
+                            'num_players': getattr(state, 'num_players', 4)
+                        }
+                        return self.cfr_player.get_raise_size(game_state)
+                
+                ai_model = CFRWrapper(cfr_player)
+                print("CFR AI ready for gameplay!")
+                
+            except Exception as e:
+                print(f"Could not load CFR model: {e}")
+                print("Starting with untrained AI")
+                ai_model = None
+        else:
+            # Load DQN model
+            ai_model = PokerAI()
+            try:
+                ai_model.load(filename)
+                print(f"DQN model loaded from {filename}")
+                ai_model.epsilon = 0  # No exploration during play
+                print(f"Config of loaded model: {ai_model.config}")
+                
+                # Option to evaluate DQN model
+                eval_choice = input("\nEvaluate DQN model? (y/n): ")
+                if eval_choice.lower() == 'y':
+                    players = int(input("Number of players for evaluation (2-6): ") or "6")
+                    evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
+            except Exception as e:
+                print(f"Could not load DQN model: {e}")
+                print("Starting with untrained AI")
+                ai_model = None
     
     elif choice == '8':
         print("Playing without AI training")
