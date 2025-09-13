@@ -123,11 +123,11 @@ class DeepCFRInformationSet:
         # Card features (52 dimensions - one-hot encoding)
         card_features = np.zeros(52)
         for card in self.hole_cards:
-            card_idx = (card.rank - 2) * 4 + ['hearts', 'diamonds', 'clubs', 'spades'].index(card.suit)
+            card_idx = (card.value - 2) * 4 + ['♠', '♥', '♦', '♣'].index(card.suit)
             card_features[card_idx] = 1
         
         for card in self.community_cards:
-            card_idx = (card.rank - 2) * 4 + ['hearts', 'diamonds', 'clubs', 'spades'].index(card.suit)
+            card_idx = (card.value - 2) * 4 + ['♠', '♥', '♦', '♣'].index(card.suit)
             card_features[card_idx] = 1
         
         features.extend(card_features)
@@ -298,8 +298,8 @@ class DeepCFRPokerAI:
         """Deep CFR algorithm using neural network approximation"""
         current_player = len(history) % num_players
         
-        # Depth limit
-        if depth > 8:
+        # Depth limit (reduce for faster training)
+        if depth > 4:
             return self._get_payoff(cards, history, pot, training_player, stack_sizes, num_players)
         
         # Terminal check
@@ -334,8 +334,8 @@ class DeepCFRPokerAI:
         # Calculate utilities for each action
         action_utilities = np.zeros(len(available_actions))
         
-        # Sample a subset of actions for efficiency
-        num_actions_to_sample = min(4, len(available_actions))
+        # Sample a subset of actions for efficiency (reduce for faster training)
+        num_actions_to_sample = min(2, len(available_actions))
         sampled_indices = np.random.choice(len(available_actions), 
                                          size=num_actions_to_sample, 
                                          replace=False, p=strategy_probs)
@@ -388,9 +388,9 @@ class DeepCFRPokerAI:
             batch_indices = random.sample(range(len(self.regret_buffer)), batch_size)
             regret_batch = [self.regret_buffer[i] for i in batch_indices]
             
-            features_batch = torch.tensor([item[0] for item in regret_batch], 
+            features_batch = torch.tensor(np.array([item[0] for item in regret_batch]), 
                                         dtype=torch.float32).to(self.device)
-            regrets_batch = torch.tensor([item[1] for item in regret_batch], 
+            regrets_batch = torch.tensor(np.array([item[1] for item in regret_batch]), 
                                        dtype=torch.float32).to(self.device)
             
             # Train regret network
@@ -406,9 +406,9 @@ class DeepCFRPokerAI:
             batch_indices = random.sample(range(len(self.strategy_buffer)), batch_size)
             strategy_batch = [self.strategy_buffer[i] for i in batch_indices]
             
-            features_batch = torch.tensor([item[0] for item in strategy_batch], 
+            features_batch = torch.tensor(np.array([item[0] for item in strategy_batch]), 
                                         dtype=torch.float32).to(self.device)
-            strategies_batch = torch.tensor([item[1] for item in strategy_batch], 
+            strategies_batch = torch.tensor(np.array([item[1] for item in strategy_batch]), 
                                           dtype=torch.float32).to(self.device)
             
             # Train strategy network
@@ -483,24 +483,15 @@ class DeepCFRPokerAI:
     
     def _is_terminal(self, history: str, num_players: int) -> bool:
         """Check if game state is terminal"""
+        # Early termination for efficiency
+        if len(history) >= 6:  # Shorter games for training efficiency
+            return True
         if 'F' in history:
             return True
-        if len(history) >= 12:  # Hard limit
-            return True
         
-        # Check for betting round completion
-        if len(history) >= num_players:
-            last_raise_pos = history.rfind('R')
-            if last_raise_pos == -1:
-                # No raises - check if all checked
-                if all(action == 'C' for action in history[-num_players:]):
-                    return True
-            else:
-                # Check if all called after last raise
-                actions_after_raise = history[last_raise_pos + 1:]
-                if len(actions_after_raise) >= num_players - 1:
-                    if all(action in 'C' for action in actions_after_raise):
-                        return True
+        # Simple completion check
+        if len(history) >= num_players * 2:
+            return True
         
         return False
     
@@ -532,7 +523,7 @@ class DeepCFRPokerAI:
                     full_hand = cards[f'player_{p}'] + cards['community']
                     hand_values[p] = evaluate_hand(full_hand)
                 except:
-                    hand_values[p] = sum(card.rank for card in cards[f'player_{p}'])
+                    hand_values[p] = sum(card.value for card in cards[f'player_{p}'])
             else:
                 hand_values[p] = 0
         
