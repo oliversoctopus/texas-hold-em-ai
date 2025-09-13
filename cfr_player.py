@@ -165,7 +165,8 @@ def train_cfr_ai(iterations: int = 10000, num_players: int = 4,
 
 
 def evaluate_cfr_ai(cfr_ai: CFRPokerAI, num_games: int = 100, 
-                    num_players: int = 4, verbose: bool = True) -> dict:
+                    num_players: int = 4, verbose: bool = True, 
+                    use_random_opponents: bool = False) -> dict:
     """
     Evaluate CFR AI performance using real poker games
     
@@ -174,6 +175,7 @@ def evaluate_cfr_ai(cfr_ai: CFRPokerAI, num_games: int = 100,
         num_games: Number of games to evaluate
         num_players: Number of players per game
         verbose: Whether to print evaluation progress
+        use_random_opponents: If True, use random AIs; if False, use strong benchmark models
         
     Returns:
         Dictionary with evaluation results
@@ -185,4 +187,4 @@ def evaluate_cfr_ai(cfr_ai: CFRPokerAI, num_games: int = 100,
         print(f"Evaluating CFR AI over {num_games} real poker games...")
     
     # Use real game evaluation
-    return evaluate_cfr_ai_real(cfr_ai, num_games, num_players, verbose)
+    return evaluate_cfr_ai_real(cfr_ai, num_games, num_players, verbose, use_random_opponents)

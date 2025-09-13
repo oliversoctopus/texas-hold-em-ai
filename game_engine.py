@@ -128,14 +128,34 @@ class TexasHoldEmTraining:
                     break
                 continue
             
-            # Get current state
-            state = player.ai_model.get_state_features(
-                player.hand, self.community_cards, self.pot, self.current_bet,
-                player.chips, player.current_bet, self.num_players,
-                sum(1 for p in self.players if not p.folded),
-                current, self.action_history[-10:], self.opponent_bets[-10:],
-                hand_phase=street_idx
-            )
+            # Check if this is a CFR or Random AI (they don't use state features)
+            is_cfr_or_random = (hasattr(player.ai_model, '__class__') and 
+                               ('CFRWrapper' in player.ai_model.__class__.__name__ or 
+                                'RandomAI' in player.ai_model.__class__.__name__))
+            
+            if is_cfr_or_random:
+                # CFR and Random AIs don't use state features, create a dummy state object
+                class DummyState:
+                    def __init__(self, player, game):
+                        self.hole_cards = player.hand
+                        self.community_cards = game.community_cards
+                        self.pot_size = game.pot
+                        self.to_call = max(0, game.current_bet - player.current_bet)
+                        self.stack_size = player.chips
+                        self.position = game.players.index(player)
+                        self.num_players = game.num_players
+                        self.action_history = game.action_history[-10:]
+                
+                state = DummyState(player, self)
+            else:
+                # Regular AI with state features
+                state = player.ai_model.get_state_features(
+                    player.hand, self.community_cards, self.pot, self.current_bet,
+                    player.chips, player.current_bet, self.num_players,
+                    sum(1 for p in self.players if not p.folded),
+                    current, self.action_history[-10:], self.opponent_bets[-10:],
+                    hand_phase=street_idx
+                )
             
             # Get valid actions and choose
             valid_actions = self.get_valid_actions(player)
@@ -146,13 +166,16 @@ class TexasHoldEmTraining:
             self.execute_action(player, action)
             
             # Get next state
-            next_state = player.ai_model.get_state_features(
-                player.hand, self.community_cards, self.pot, self.current_bet,
-                player.chips, player.current_bet, self.num_players,
-                sum(1 for p in self.players if not p.folded),
-                current, self.action_history[-10:], self.opponent_bets[-10:],
-                hand_phase=street_idx
-            )
+            if is_cfr_or_random:
+                next_state = DummyState(player, self)
+            else:
+                next_state = player.ai_model.get_state_features(
+                    player.hand, self.community_cards, self.pot, self.current_bet,
+                    player.chips, player.current_bet, self.num_players,
+                    sum(1 for p in self.players if not p.folded),
+                    current, self.action_history[-10:], self.opponent_bets[-10:],
+                    hand_phase=street_idx
+                )
             
             # Store experience
             experiences.append((player, state, action, next_state))
@@ -230,16 +253,36 @@ class TexasHoldEmTraining:
             
             # Get strategic raise size from AI if available
             if player.ai_model and hasattr(player.ai_model, 'get_raise_size'):
-                # Get current state for the AI
-                street_idx = self.current_street if hasattr(self, 'current_street') else 0
-                state = player.ai_model.get_state_features(
-                    player.hand, self.community_cards, self.pot, self.current_bet,
-                    player.chips, player.current_bet, self.num_players,
-                    sum(1 for p in self.players if not p.folded),
-                    self.players.index(player), self.action_history[-10:], 
-                    self.opponent_bets[-10:],
-                    hand_phase=street_idx
-                )
+                # Check if this is a CFR or Random AI
+                is_cfr_or_random = (hasattr(player.ai_model, '__class__') and 
+                                   ('CFRWrapper' in player.ai_model.__class__.__name__ or 
+                                    'RandomAI' in player.ai_model.__class__.__name__))
+                
+                if is_cfr_or_random:
+                    # CFR and Random AIs use different state format
+                    class DummyState:
+                        def __init__(self, player, game):
+                            self.hole_cards = player.hand
+                            self.community_cards = game.community_cards
+                            self.pot_size = game.pot
+                            self.to_call = max(0, game.current_bet - player.current_bet)
+                            self.stack_size = player.chips
+                            self.position = game.players.index(player)
+                            self.num_players = game.num_players
+                            self.action_history = game.action_history[-10:]
+                    
+                    state = DummyState(player, self)
+                else:
+                    # Regular AI with state features
+                    street_idx = self.current_street if hasattr(self, 'current_street') else 0
+                    state = player.ai_model.get_state_features(
+                        player.hand, self.community_cards, self.pot, self.current_bet,
+                        player.chips, player.current_bet, self.num_players,
+                        sum(1 for p in self.players if not p.folded),
+                        self.players.index(player), self.action_history[-10:], 
+                        self.opponent_bets[-10:],
+                        hand_phase=street_idx
+                    )
                 raise_amount = player.ai_model.get_raise_size(
                     state, self.pot, self.current_bet, player.chips, 
                     player.current_bet, min_raise
@@ -307,9 +350,10 @@ class TexasHoldEmTraining:
 
 # Keep simplified game class for interactive play
 class TexasHoldEm:
-    def __init__(self, num_players=4, starting_chips=1000):
+    def __init__(self, num_players=4, starting_chips=1000, verbose=True):
         self.num_players = num_players
         self.starting_chips = starting_chips
+        self.verbose = verbose  # Control output during evaluation
         self.deck = Deck()
         self.community_cards = []
         self.pot = 0
@@ -371,7 +415,7 @@ class TexasHoldEm:
             elif street == 'river':
                 self.community_cards.append(self.deck.draw())
             
-            if verbose:
+            if self.verbose:
                 print(f"\n--- {street.capitalize()} ---")
                 if self.community_cards:
                     print(f"Community cards: {self.community_cards}")
@@ -441,14 +485,34 @@ class TexasHoldEm:
             # Get action based on player type
             if player.is_ai:
                 if player.ai_model:
-                    # AI with trained model
-                    state = player.ai_model.get_state_features(
-                        player.hand, self.community_cards, self.pot, self.current_bet,
-                        player.chips, player.current_bet, self.num_players,
-                        sum(1 for p in self.players if not p.folded),
-                        current, self.action_history[-10:], self.opponent_bets[-10:],
-                        hand_phase=street_idx
-                    )
+                    # Check if this is a CFR or Random AI
+                    is_cfr_or_random = (hasattr(player.ai_model, '__class__') and 
+                                       ('CFRWrapper' in player.ai_model.__class__.__name__ or 
+                                        'RandomAI' in player.ai_model.__class__.__name__))
+                    
+                    if is_cfr_or_random:
+                        # CFR and Random AIs use different state format
+                        class DummyState:
+                            def __init__(self, player, game):
+                                self.hole_cards = player.hand
+                                self.community_cards = game.community_cards
+                                self.pot_size = game.pot
+                                self.to_call = max(0, game.current_bet - player.current_bet)
+                                self.stack_size = player.chips
+                                self.position = game.players.index(player)
+                                self.num_players = game.num_players
+                                self.action_history = game.action_history[-10:]
+                        
+                        state = DummyState(player, self)
+                    else:
+                        # AI with trained model - use state features
+                        state = player.ai_model.get_state_features(
+                            player.hand, self.community_cards, self.pot, self.current_bet,
+                            player.chips, player.current_bet, self.num_players,
+                            sum(1 for p in self.players if not p.folded),
+                            current, self.action_history[-10:], self.opponent_bets[-10:],
+                            hand_phase=street_idx
+                        )
                     action = player.ai_model.choose_action(state, valid_actions, training=False)
                     # Store current street for execute_action
                     self.current_street = street_idx
@@ -537,7 +601,7 @@ class TexasHoldEm:
         """Execute player action with proper no-limit rules"""
         if action == Action.FOLD:
             player.folded = True
-            if verbose:
+            if self.verbose:
                 print(f"{player.name} folds")
         elif action == Action.CHECK:
             if verbose:
@@ -547,7 +611,7 @@ class TexasHoldEm:
             amount = player.bet(call_amount)
             self.pot += amount
             self.opponent_bets.append(amount)
-            if verbose:
+            if self.verbose:
                 print(f"{player.name} calls ${amount}")
         elif action == Action.RAISE:
             # Get raise amount
@@ -568,16 +632,36 @@ class TexasHoldEm:
                 
                 # Get strategic raise size from AI
                 if player.ai_model and hasattr(player.ai_model, 'get_raise_size'):
-                    # Get current state for the AI
-                    hand_phase = self.current_street if hasattr(self, 'current_street') else 0
-                    state = player.ai_model.get_state_features(
-                        player.hand, self.community_cards, self.pot, self.current_bet,
-                        player.chips, player.current_bet, self.num_players,
-                        sum(1 for p in self.players if not p.folded),
-                        self.players.index(player), self.action_history[-10:], 
-                        self.opponent_bets[-10:],
-                        hand_phase=hand_phase
-                    )
+                    # Check if this is a CFR or Random AI
+                    is_cfr_or_random = (hasattr(player.ai_model, '__class__') and 
+                                       ('CFRWrapper' in player.ai_model.__class__.__name__ or 
+                                        'RandomAI' in player.ai_model.__class__.__name__))
+                    
+                    if is_cfr_or_random:
+                        # CFR and Random AIs use different state format
+                        class DummyState:
+                            def __init__(self, player, game):
+                                self.hole_cards = player.hand
+                                self.community_cards = game.community_cards
+                                self.pot_size = game.pot
+                                self.to_call = max(0, game.current_bet - player.current_bet)
+                                self.stack_size = player.chips
+                                self.position = game.players.index(player)
+                                self.num_players = game.num_players
+                                self.action_history = game.action_history[-10:]
+                        
+                        state = DummyState(player, self)
+                    else:
+                        # Regular AI - get current state for the AI
+                        hand_phase = self.current_street if hasattr(self, 'current_street') else 0
+                        state = player.ai_model.get_state_features(
+                            player.hand, self.community_cards, self.pot, self.current_bet,
+                            player.chips, player.current_bet, self.num_players,
+                            sum(1 for p in self.players if not p.folded),
+                            self.players.index(player), self.action_history[-10:], 
+                            self.opponent_bets[-10:],
+                            hand_phase=hand_phase
+                        )
                     raise_amount = player.ai_model.get_raise_size(
                         state, self.pot, self.current_bet, player.chips, 
                         player.current_bet, min_raise
@@ -607,7 +691,7 @@ class TexasHoldEm:
             self.last_raise_amount = self.current_bet - old_bet
             
             self.opponent_bets.append(total)
-            if verbose:
+            if self.verbose:
                 if old_bet > 0:
                     print(f"{player.name} raises to ${self.current_bet}")
                 else:
@@ -621,13 +705,13 @@ class TexasHoldEm:
                 self.current_bet = player.current_bet
                 # Track raise amount if this all-in is effectively a raise
                 self.last_raise_amount = self.current_bet - old_bet
-                if verbose:
+                if self.verbose:
                     if old_bet > 0:
                         print(f"{player.name} goes all-in for ${amount} (raises to ${self.current_bet})")
                     else:
                         print(f"{player.name} goes all-in for ${amount}")
             else:
-                if verbose:
+                if self.verbose:
                     print(f"{player.name} goes all-in for ${amount} (call)")
             self.opponent_bets.append(amount)
     

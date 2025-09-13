@@ -45,7 +45,9 @@ def main():
         # Evaluate CFR AI
         eval_choice = input("\nEvaluate CFR AI? (y/n): ")
         if eval_choice.lower() == 'y':
-            evaluate_cfr_ai(cfr_ai, num_games=100, num_players=players)
+            opponent_choice = input("Use random opponents for baseline testing? (y/n): ")
+            use_random = opponent_choice.lower() == 'y'
+            evaluate_cfr_ai(cfr_ai, num_games=100, num_players=players, use_random_opponents=use_random)
         
         # Save CFR model
         save_choice = input("\nSave CFR model? (y/n): ")
@@ -411,8 +413,11 @@ def main():
                 eval_choice = input("\nEvaluate CFR model? (y/n): ")
                 if eval_choice.lower() == 'y':
                     players = int(input("Number of players for evaluation (2-6): ") or "6")
+                    opponent_choice = input("Use random opponents for baseline testing? (y/n): ")
+                    use_random = opponent_choice.lower() == 'y'
+                    
                     from cfr_player import evaluate_cfr_ai
-                    evaluate_cfr_ai(cfr_ai, num_games=50, num_players=players)
+                    evaluate_cfr_ai(cfr_ai, num_games=50, num_players=players, use_random_opponents=use_random)
                 
                 # Create wrapper for gameplay compatibility
                 class CFRWrapper:
