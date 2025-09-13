@@ -105,32 +105,21 @@ def main():
             verbose=True
         )
         
-        # Evaluate against random opponents (only 2-player evaluation)
+        # Evaluate against random opponents using specialized 2-player evaluation
         eval_choice = input("\nEvaluate 2-Player CFR AI? (y/n): ")
         if eval_choice.lower() == 'y':
-            print("Note: 2-Player CFR evaluation requires exactly 2 players")
-            # Create a simple wrapper for 2-player evaluation
-            class TwoPlayerCFRWrapper:
-                def __init__(self, cfr_ai):
-                    self.cfr_ai = cfr_ai
-                    
-                def choose_action(self, game_state):
-                    return self.cfr_ai.get_action(
-                        hole_cards=game_state.get('hole_cards', []),
-                        community_cards=game_state.get('community_cards', []),
-                        betting_history="",
-                        pot_size=game_state.get('pot_size', 0),
-                        to_call=game_state.get('to_call', 0),
-                        stack_size=game_state.get('stack_size', 1000),
-                        position=game_state.get('position', 0),
-                        num_players=2
-                    )
-                    
-                def get_raise_size(self, game_state):
-                    return max(50, game_state.get('pot_size', 0) // 2)
+            print("Running specialized 2-player CFR evaluation...")
+            num_games = int(input("Number of games (default: 100): ") or "100")
             
-            print("Running quick 2-player evaluation...")
-            print("2-Player CFR AI trained and ready!")
+            # Use specialized 2-player evaluation framework
+            from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
+            results = evaluate_two_player_cfr_ai(cfr_ai, num_games=num_games, verbose=True)
+            
+            # Show summary
+            print(f"\n[SUMMARY] 2-Player CFR Evaluation Complete:")
+            print(f"  Win rate: {results['win_rate']:.1f}%")
+            print(f"  Strategy usage: {results.get('strategy_usage', 'N/A')}")
+            print("2-Player CFR AI evaluation complete!")
         
         # Save CFR model
         save_choice = input("\nSave 2-Player CFR model? (y/n): ")
@@ -230,6 +219,32 @@ def main():
         print("\n⚠️  [DEPRECATED] DQN Training with Strategy Diversity")
         print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
         print("Skipping DQN training. Please use options 1-3 for modern AI training.")
+
+    elif choice == '5':
+        print("\n[DEPRECATED] Hyperparameter tuning")
+        print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
+        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1500")
+        players = int(input("Number of players for training (2-6): ") or "4")
+        
+        print(f"\nTraining against pre-trained strong opponents...")
+        from training import train_ai_vs_strong_opponents
+        ai_model = train_ai_vs_strong_opponents(
+            num_episodes=episodes,
+            num_players=players
+        )
+        
+        # Evaluate
+        eval_choice = input("\nEvaluate AI? (y/n): ")
+        if eval_choice.lower() == 'y':
+            evaluate_ai_full(ai_model, num_games=10000, num_players=players, use_strong_opponents=True)
+        
+        # Save
+        save_choice = input("\nSave model? (y/n): ")
+        if save_choice.lower() == 'y':
+            filename = input("Filename (default: vs_strong_ai.pth): ") or "vs_strong_ai.pth"
+            ai_model.save(filename)
+            print(f"Model saved to {filename}")
+
     elif choice == '6':
         print("\n[DEPRECATED] Training with strategy diversity (prevents all-in spam)")
         print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
@@ -282,97 +297,123 @@ def main():
             filename = input("Filename (default: balanced_poker_ai.pth): ") or "balanced_poker_ai.pth"
             ai_model.save(filename)
             print(f"Model saved to {filename}")
-    
-    elif choice == '5':
-        print("\n[DEPRECATED] Hyperparameter tuning")
-        print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
-        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1500")
-        players = int(input("Number of players for training (2-6): ") or "4")
-        
-        print(f"\nTraining against pre-trained strong opponents...")
-        from training import train_ai_vs_strong_opponents
-        ai_model = train_ai_vs_strong_opponents(
-            num_episodes=episodes,
-            num_players=players
-        )
-        
-        # Evaluate
-        eval_choice = input("\nEvaluate AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            evaluate_ai_full(ai_model, num_games=10000, num_players=players, use_strong_opponents=True)
-        
-        # Save
-        save_choice = input("\nSave model? (y/n): ")
-        if save_choice.lower() == 'y':
-            filename = input("Filename (default: vs_strong_ai.pth): ") or "vs_strong_ai.pth"
-            ai_model.save(filename)
-            print(f"Model saved to {filename}")
-    
-    
+            
     elif choice == '7':
         filename = input("Model filename (.pth for DQN, .pkl for CFR, default: poker_ai.pth): ") or "poker_ai.pth"
         
         # Check if it's a CFR model (.pkl) or DQN model (.pth)
         if filename.endswith('.pkl'):
-            # Load CFR model
-            try:
-                from cfr.cfr_poker import CFRPokerAI
-                from cfr.cfr_player import CFRPlayer
-                
-                print(f"Loading CFR model from {filename}...")
-                cfr_ai = CFRPokerAI()
-                cfr_ai.load(filename)
-                print(f"CFR model loaded from {filename}")
-                print(f"Information sets learned: {len(cfr_ai.nodes)}")
-                
-                # Create CFR player wrapper
-                cfr_player = CFRPlayer(cfr_ai)
-                
-                # Option to evaluate CFR model
-                eval_choice = input("\nEvaluate CFR model? (y/n): ")
-                if eval_choice.lower() == 'y':
-                    players = int(input("Number of players for evaluation (2-6): ") or "6")
-                    opponent_choice = input("Use random opponents for baseline testing? (y/n): ")
-                    use_random = opponent_choice.lower() == 'y'
+            # Check if it's a 2-player CFR model
+            if 'two_player' in filename.lower():
+                # Load 2-Player CFR model
+                try:
+                    from cfr.cfr_two_player import TwoPlayerCFRPokerAI
                     
-                    from cfr.cfr_player import evaluate_cfr_ai
-                    evaluate_cfr_ai(cfr_ai, num_games=50, num_players=players, use_random_opponents=use_random)
-                
-                # Create wrapper for gameplay compatibility
-                class CFRWrapper:
-                    def __init__(self, cfr_player):
-                        self.cfr_player = cfr_player
-                        self.epsilon = 0  # CFR doesn't use epsilon
+                    print(f"Loading 2-Player CFR model from {filename}...")
+                    cfr_ai = TwoPlayerCFRPokerAI()
+                    cfr_ai.load(filename)
+                    print(f"2-Player CFR model loaded from {filename}")
+                    print(f"Information sets learned: {len(cfr_ai.nodes)}")
+                    
+                    # Option to evaluate 2-player CFR model
+                    eval_choice = input("\nEvaluate 2-Player CFR model? (y/n): ")
+                    if eval_choice.lower() == 'y':
+                        num_games = int(input("Number of games (default: 100): ") or "100")
                         
-                    def choose_action(self, state, valid_actions):
-                        # Convert state to CFR format
-                        game_state = {
-                            'hole_cards': getattr(state, 'hole_cards', []),
-                            'community_cards': getattr(state, 'community_cards', []),
-                            'pot_size': getattr(state, 'pot_size', 0),
-                            'to_call': getattr(state, 'to_call', 0),
-                            'stack_size': getattr(state, 'stack_size', 1000),
-                            'position': getattr(state, 'position', 0),
-                            'num_players': getattr(state, 'num_players', 4),
-                            'action_history': getattr(state, 'action_history', [])
-                        }
-                        return self.cfr_player.choose_action(game_state)
+                        from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
+                        results = evaluate_two_player_cfr_ai(cfr_ai, num_games=num_games, verbose=True)
+                        
+                        print(f"\n[SUMMARY] Evaluation Complete:")
+                        print(f"  Win rate: {results['win_rate']:.1f}%")
+                        print(f"  Strategy usage: {results.get('strategy_usage', 'N/A')}")
                     
-                    def get_raise_size(self, state):
-                        game_state = {
-                            'pot_size': getattr(state, 'pot_size', 0),
-                            'position': getattr(state, 'position', 0),
-                            'num_players': getattr(state, 'num_players', 4)
-                        }
-                        return self.cfr_player.get_raise_size(game_state)
+                    # Create wrapper for 2-player gameplay
+                    class TwoPlayerCFRGameWrapper:
+                        def __init__(self, cfr_ai):
+                            self.cfr_ai = cfr_ai
+                            self.epsilon = 0
+                            
+                        def choose_action(self, state, valid_actions, **kwargs):
+                            game_state = {
+                                'hole_cards': getattr(state, 'hole_cards', []),
+                                'community_cards': getattr(state, 'community_cards', []),
+                                'pot_size': getattr(state, 'pot_size', 0),
+                                'to_call': getattr(state, 'to_call', 0),
+                                'stack_size': getattr(state, 'stack_size', 1000),
+                                'position': getattr(state, 'position', 0),
+                                'num_players': 2
+                            }
+                            return self.cfr_ai.get_action(**game_state)
+                        
+                        def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
+                            return max(min_raise, pot // 2)
+                    
+                    ai_model = TwoPlayerCFRGameWrapper(cfr_ai)
+                    print("2-Player CFR AI ready for gameplay!")
+                    
+                except Exception as e:
+                    print(f"Error loading 2-Player CFR model: {e}")
+                    return
+            else:
+                # Load regular multi-player CFR model
+                try:
+                    from cfr.cfr_poker import CFRPokerAI
+                    from cfr.cfr_player import CFRPlayer
+                    
+                    print(f"Loading CFR model from {filename}...")
+                    cfr_ai = CFRPokerAI()
+                    cfr_ai.load(filename)
+                    print(f"CFR model loaded from {filename}")
+                    print(f"Information sets learned: {len(cfr_ai.nodes)}")
+                    
+                    # Create CFR player wrapper
+                    cfr_player = CFRPlayer(cfr_ai)
+                    
+                    # Option to evaluate CFR model
+                    eval_choice = input("\nEvaluate CFR model? (y/n): ")
+                    if eval_choice.lower() == 'y':
+                        players = int(input("Number of players for evaluation (2-6): ") or "6")
+                        opponent_choice = input("Use random opponents for baseline testing? (y/n): ")
+                        use_random = opponent_choice.lower() == 'y'
+                        
+                        from cfr.cfr_player import evaluate_cfr_ai
+                        evaluate_cfr_ai(cfr_ai, num_games=50, num_players=players, use_random_opponents=use_random)
                 
-                ai_model = CFRWrapper(cfr_player)
-                print("CFR AI ready for gameplay!")
-                
-            except Exception as e:
-                print(f"Could not load CFR model: {e}")
-                print("Starting with untrained AI")
-                ai_model = None
+                    # Create wrapper for gameplay compatibility
+                    class CFRWrapper:
+                        def __init__(self, cfr_player):
+                            self.cfr_player = cfr_player
+                            self.epsilon = 0  # CFR doesn't use epsilon
+                            
+                        def choose_action(self, state, valid_actions):
+                            # Convert state to CFR format
+                            game_state = {
+                                'hole_cards': getattr(state, 'hole_cards', []),
+                                'community_cards': getattr(state, 'community_cards', []),
+                                'pot_size': getattr(state, 'pot_size', 0),
+                                'to_call': getattr(state, 'to_call', 0),
+                                'stack_size': getattr(state, 'stack_size', 1000),
+                                'position': getattr(state, 'position', 0),
+                                'num_players': getattr(state, 'num_players', 4),
+                                'action_history': getattr(state, 'action_history', [])
+                            }
+                            return self.cfr_player.choose_action(game_state)
+                        
+                        def get_raise_size(self, state):
+                            game_state = {
+                                'pot_size': getattr(state, 'pot_size', 0),
+                                'position': getattr(state, 'position', 0),
+                                'num_players': getattr(state, 'num_players', 4)
+                            }
+                            return self.cfr_player.get_raise_size(game_state)
+                    
+                    ai_model = CFRWrapper(cfr_player)
+                    print("CFR AI ready for gameplay!")
+                    
+                except Exception as e:
+                    print(f"Could not load CFR model: {e}")
+                    print("Starting with untrained AI")
+                    ai_model = None
         else:
             # Load DQN model
             ai_model = PokerAI()
