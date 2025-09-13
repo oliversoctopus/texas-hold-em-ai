@@ -1,7 +1,7 @@
 import random
-from game_constants import Action
-from card_deck import Card, Deck, evaluate_hand
-from player import Player
+from .game_constants import Action
+from .card_deck import Card, Deck, evaluate_hand
+from .player import Player
 
 class TexasHoldEmTraining:
     """Specialized class for training with better state tracking"""

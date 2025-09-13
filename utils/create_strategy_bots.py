@@ -6,10 +6,10 @@ These are used as training opponents to create more diverse AI strategies
 import os
 import random
 import numpy as np
-from poker_ai import PokerAI
-from game_engine import TexasHoldEmTraining
-from game_constants import Action
-from neural_network import Experience  # Import Experience from neural_network
+from dqn.poker_ai import PokerAI
+from core.game_engine import TexasHoldEmTraining
+from core.game_constants import Action
+from dqn.neural_network import Experience  # Import Experience from neural_network
 
 def train_conservative_bot(episodes=500):
     """Train a bot that plays tight and rarely goes all-in"""

@@ -3,9 +3,9 @@ import torch
 import numpy as np
 import random
 from typing import List, Dict, Tuple
-from poker_ai import PokerAI
-from game_engine import TexasHoldEm  # Use full engine, not training version
-from player import Player
+from dqn.poker_ai import PokerAI
+from core.game_engine import TexasHoldEm  # Use full engine, not training version
+from core.player import Player
 
 class AdvancedEvaluator:
     """Advanced evaluation system that tests against strong, trained AI models"""
