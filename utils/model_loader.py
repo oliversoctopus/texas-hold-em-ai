@@ -212,6 +212,26 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
             def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
                 return self.cfr_ai.get_raise_size(pot, current_bet, player_chips, min_raise)
 
+            def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
+                                 player_bet, num_players, players_in_hand, position=0,
+                                 action_history=None, opponent_bets=None, hand_phase=0):
+                """Create state object for Neural-Enhanced CFR"""
+                class CFRState:
+                    def __init__(self, hand, community_cards, pot, current_bet, player_chips,
+                               player_bet, num_players, action_history, position):
+                        self.hole_cards = hand
+                        self.community_cards = community_cards
+                        self.pot_size = pot
+                        self.to_call = max(0, current_bet - player_bet)
+                        self.stack_size = player_chips
+                        self.position = position
+                        self.num_players = num_players
+                        self.action_history = action_history[-10:] if action_history else []
+                        self.betting_history = ''  # CFR uses string format
+
+                return CFRState(hand, community_cards, pot, current_bet, player_chips,
+                              player_bet, num_players, action_history, position)
+
         return NeuralEnhancedTwoPlayerCFRGameWrapper(model)
 
     elif model_type == 'TwoPlayerCFR':
