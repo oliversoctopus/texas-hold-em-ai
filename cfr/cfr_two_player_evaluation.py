@@ -7,7 +7,7 @@ import numpy as np
 from typing import List, Dict, Optional
 from core.game_engine import TexasHoldEm
 from core.player import Player
-from .cfr_two_player import TwoPlayerCFRPokerAI, TwoPlayerInformationSet
+# Removed old import - evaluation now works with any CFR model with compatible interface
 
 
 class TwoPlayerCFRPlayer:
@@ -15,7 +15,7 @@ class TwoPlayerCFRPlayer:
     Specialized player wrapper for 2-player CFR
     """
     
-    def __init__(self, cfr_ai: TwoPlayerCFRPokerAI):
+    def __init__(self, cfr_ai):
         self.cfr_ai = cfr_ai
         self.name = "TwoPlayer_CFR_AI"
         
@@ -87,14 +87,55 @@ class TwoPlayerCFREvaluator:
     def __init__(self):
         pass
     
-    def evaluate_two_player_cfr(self, cfr_ai: TwoPlayerCFRPokerAI, 
-                               num_games: int = 100, verbose: bool = True) -> Dict:
+    def evaluate_two_player_cfr(self, cfr_ai,
+                               num_games: int = 100, verbose: bool = True,
+                               use_strong_opponents: bool = False) -> Dict:
         """
-        Evaluate 2-player CFR against random opponents
+        Evaluate 2-player CFR against random or DQN opponents
+
+        Args:
+            cfr_ai: The CFR AI to evaluate
+            num_games: Number of games to play
+            verbose: Whether to print progress
+            use_strong_opponents: If True, use DQN benchmark models; if False, use random
         """
+        opponent_type = "DQN benchmark models" if use_strong_opponents else "random opponents"
         if verbose:
-            print(f"Evaluating 2-Player CFR in {num_games} heads-up poker games...")
-        
+            print(f"Evaluating 2-Player CFR against {opponent_type} in {num_games} heads-up poker games...")
+
+        # Load DQN benchmark models if requested
+        strong_opponents = []
+        if use_strong_opponents:
+            import os
+            from dqn.poker_ai import PokerAI
+
+            # Use only the good benchmark models
+            strong_model_paths = [
+                'models/dqn/tuned_ai_v2.pth',      # Complex model with good strategy
+                'models/dqn/tuned_ai_v4.pth',      # Another strong version
+                'models/dqn/poker_ai_tuned.pth',   # Earlier strong model
+            ]
+
+            for path in strong_model_paths:
+                if os.path.exists(path):
+                    try:
+                        opponent = PokerAI()
+                        opponent.load(path)
+                        opponent.epsilon = 0  # No exploration during evaluation
+                        strong_opponents.append(opponent)
+                        if verbose:
+                            print(f"  Loaded DQN opponent: {path}")
+                    except Exception as e:
+                        if verbose:
+                            print(f"  Failed to load {path}: {e}")
+
+            if not strong_opponents:
+                if verbose:
+                    print("  No DQN opponents loaded, falling back to random opponents")
+                use_strong_opponents = False
+            elif verbose:
+                print(f"  Successfully loaded {len(strong_opponents)} DQN opponents")
+
         # Reset strategy usage stats
         cfr_ai.reset_strategy_stats()
         
@@ -118,9 +159,9 @@ class TwoPlayerCFREvaluator:
             # Randomize dealer position
             game.dealer_position = random.randint(0, 1)
             
-            # Create players - CFR vs Random
+            # Create players - CFR vs Random/DQN
             cfr_position = game_num % 2  # Alternate positions
-            
+
             players = []
             for i in range(2):
                 if i == cfr_position:
@@ -129,10 +170,18 @@ class TwoPlayerCFREvaluator:
                     player.ai_model = self._create_cfr_wrapper(cfr_player)
                     players.append(player)
                 else:
-                    # Random opponent
-                    player = Player(f"Random", starting_chips, is_ai=True)
-                    player.ai_model = self._create_random_ai()
-                    players.append(player)
+                    # Opponent - either DQN or random
+                    if use_strong_opponents and strong_opponents:
+                        # Use rotating DQN opponents
+                        dqn_ai = strong_opponents[game_num % len(strong_opponents)]
+                        player = Player(f"DQN_Opponent", starting_chips, is_ai=True)
+                        player.ai_model = dqn_ai
+                        players.append(player)
+                    else:
+                        # Random opponent
+                        player = Player(f"Random", starting_chips, is_ai=True)
+                        player.ai_model = self._create_random_ai()
+                        players.append(player)
             
             game.players = players
             
@@ -288,10 +337,17 @@ class TwoPlayerCFREvaluator:
             print(f"  {pos_names[pos]}: {wr:.1f}%")
 
 
-def evaluate_two_player_cfr_ai(cfr_ai: TwoPlayerCFRPokerAI, 
-                              num_games: int = 100, verbose: bool = True) -> Dict:
+def evaluate_two_player_cfr_ai(cfr_ai,
+                              num_games: int = 100, verbose: bool = True,
+                              use_strong_opponents: bool = False) -> Dict:
     """
     Convenience function to evaluate 2-player CFR
+
+    Args:
+        cfr_ai: The CFR AI to evaluate
+        num_games: Number of games to play
+        verbose: Whether to print progress
+        use_strong_opponents: If True, use DQN benchmark models; if False, use random
     """
     evaluator = TwoPlayerCFREvaluator()
-    return evaluator.evaluate_two_player_cfr(cfr_ai, num_games, verbose)
+    return evaluator.evaluate_two_player_cfr(cfr_ai, num_games, verbose, use_strong_opponents)
