@@ -114,11 +114,12 @@ class CFRTrainingEngine:
         """
         if verbose:
             print(f"Training CFR AI with {iterations} iterations...")
+            print(f"Training for {self.num_players}-player games")
             print("This will create a strong poker AI using game theory optimal strategies.")
         
-        # Train the CFR algorithm
+        # Train the CFR algorithm with specified number of players
         self.cfr_ai = CFRPokerAI(iterations=iterations)
-        self.cfr_ai.train(verbose=verbose)
+        self.cfr_ai.train(num_players=self.num_players, verbose=verbose)
         
         if verbose:
             print(f"CFR training completed!")

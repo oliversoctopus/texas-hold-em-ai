@@ -24,11 +24,11 @@ class AdvancedEvaluator:
         if benchmark_models_paths is None:
             # Try to find these strong models in the current directory
             potential_models = [
-                'tuned_ai_v2.pth',      # Complex model with good strategy
-                'tuned_ai_v4.pth',      # Another strong version
-                'poker_ai_tuned.pth',   # Earlier strong model
-                'standard_ai_v3.pth',   # Decent baseline
-                'opponent_eval.pth'     # For comparison with all-in strategy
+                'models/dqn/tuned_ai_v2.pth',      # Complex model with good strategy
+                'models/dqn/tuned_ai_v4.pth',      # Another strong version
+                'models/dqn/poker_ai_tuned.pth',   # Earlier strong model
+                'models/dqn/standard_ai_v3.pth',   # Decent baseline
+                'models/dqn/opponent_eval.pth'     # For comparison with all-in strategy
             ]
             benchmark_models_paths = [p for p in potential_models if os.path.exists(p)]
         

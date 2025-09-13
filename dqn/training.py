@@ -587,12 +587,11 @@ def evaluate_ai_full(ai_model, num_games=100, num_players=4, use_strong_opponent
     # Try to load strong opponent models if requested
     strong_opponents = []
     if use_strong_opponents:
-        # Try to find strong models in current directory
+        # Use only the good benchmark models
         strong_model_paths = [
-            'tuned_ai_v2.pth',
-            'tuned_ai_v4.pth', 
-            'poker_ai_tuned.pth',
-            'standard_ai_v3.pth'
+            'models/dqn/tuned_ai_v2.pth',      # Complex model with good strategy
+            'models/dqn/tuned_ai_v4.pth',      # Another strong version
+            'models/dqn/poker_ai_tuned.pth',   # Earlier strong model
         ]
         
         for path in strong_model_paths:

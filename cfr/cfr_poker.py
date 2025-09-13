@@ -270,29 +270,54 @@ class CFRPokerAI:
             'total_decisions': 0
         }
     
-    def train(self, verbose: bool = True):
-        """Train the CFR algorithm"""
+    def train(self, num_players: int = 6, verbose: bool = True):
+        """Train the CFR algorithm
+
+        Args:
+            num_players: Number of players to train for (2-6)
+            verbose: Whether to print training progress
+        """
         if verbose:
             print(f"Training CFR for {self.iterations} iterations...")
-        
+            print(f"Training for {num_players}-player games")
+
         for iteration in range(self.iterations):
-            # EVALUATION-FOCUSED TRAINING: Train primarily on 6-player scenarios to match evaluation
-            if iteration < self.iterations // 20:  # First 5% - quick fundamentals
-                num_players = random.choice([5, 6])  # Start with target sizes
-            else:  # 95% of training - focus on evaluation scenario
-                num_players = random.choice([6, 6, 6, 6, 6, 6, 6, 5])  # 87.5% 6-player games
-            
+            # Use the specified number of players, with some variation for robustness
+            if num_players == 2:
+                # For 2-player, always train on 2-player
+                training_num_players = 2
+            elif num_players <= 4:
+                # For 3-4 players, occasionally train on nearby sizes for robustness
+                if iteration < self.iterations // 10:  # First 10% - exact size
+                    training_num_players = num_players
+                else:
+                    # Add some variation around target size
+                    variation = [-1, 0, 0, 0, 1] if num_players > 2 else [0]
+                    training_num_players = max(2, min(6, num_players + random.choice(variation)))
+            else:  # 5-6 players
+                # For larger games, train mostly on target size with some variation
+                if iteration < self.iterations // 20:  # First 5% - exact size
+                    training_num_players = num_players
+                else:
+                    # Weighted toward target size
+                    if num_players == 6:
+                        training_num_players = random.choice([6, 6, 6, 6, 5])  # 80% target size
+                    else:  # num_players == 5
+                        training_num_players = random.choice([5, 5, 5, 4, 6])  # 60% target size
+
             # BALANCED POSITION TRAINING: Ensure all positions get adequate training
-            # Use weighted training - train more on critical positions
-            if num_players == 6:
-                # In 6-player: positions 0,1,2 (early), 3,4 (middle), 5 (button) 
-                # Train more on button and middle positions (often more complex)
-                position_weights = [1, 1, 1, 2, 2, 3]  # Button gets 3x training
-                training_player = random.choices(range(num_players), weights=position_weights)[0]
+            if training_num_players >= 5:
+                # For larger games, weight toward more complex positions
+                if training_num_players == 6:
+                    position_weights = [1, 1, 1, 2, 2, 3]  # Button gets most training
+                else:  # 5 players
+                    position_weights = [1, 1, 2, 2, 3]  # Weight toward late positions
+                training_player = random.choices(range(training_num_players), weights=position_weights)[0]
             else:
-                training_player = iteration % num_players
-                
-            self._cfr_iteration(training_player, iteration, num_players)
+                # For smaller games, train all positions equally
+                training_player = iteration % training_num_players
+
+            self._cfr_iteration(training_player, iteration, training_num_players)
             
             if verbose and iteration % 1000 == 0:
                 print(f"  Iteration {iteration}/{self.iterations}, Nodes: {len(self.nodes)}")
@@ -392,7 +417,7 @@ class CFRPokerAI:
     
     def _deal_random_cards(self, num_players: int = 2, num_community: int = None) -> Dict:
         """Deal random cards for training"""
-        from card_deck import Deck
+        from core.card_deck import Deck
         deck = Deck()
         deck.reset()
         
@@ -869,6 +894,8 @@ class CFRPokerAI:
         """Save the trained CFR model"""
         with open(filename, 'wb') as f:
             pickle.dump({
+                'model_type': 'MultiPlayerCFR',
+                'model_version': '1.0',
                 'nodes': self.nodes,
                 'iterations': self.iterations,
                 'strategy_stats': self.strategy_stats

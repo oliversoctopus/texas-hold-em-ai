@@ -254,7 +254,7 @@ class DeepCFRPokerAI:
             print(f"Networks have {self.hidden_size} hidden units each")
         
         for iteration in range(iterations):
-            if verbose and (iteration == 0 or (iteration + 1) % (iterations // 10) == 0):
+            if verbose and (iteration == 0 or (iteration + 1) % (iterations // 20) == 0):
                 print(f"  Iteration {iteration}/{iterations}")
             
             # Generate training data through self-play
@@ -628,8 +628,10 @@ class DeepCFRPokerAI:
             print(f"  [MIXED] Using combination of learned and fallback strategies")
     
     def save(self, filename: str):
-        """Save the Deep CFR model"""
+        """Save the Deep CFR model with type flag"""
         torch.save({
+            'model_type': 'DeepCFR',  # Model type flag
+            'model_version': '1.0',
             'regret_net_state_dict': self.regret_net.state_dict(),
             'strategy_net_state_dict': self.strategy_net.state_dict(),
             'regret_optimizer_state_dict': self.regret_optimizer.state_dict(),
@@ -645,7 +647,11 @@ class DeepCFRPokerAI:
     def load(self, filename: str):
         """Load a Deep CFR model"""
         checkpoint = torch.load(filename, map_location=self.device)
-        
+
+        # Verify it's a Deep CFR model
+        if checkpoint.get('model_type') != 'DeepCFR':
+            print(f"Warning: Expected DeepCFR model, got {checkpoint.get('model_type', 'Unknown')}")
+
         # Recreate networks if needed
         feature_dim = checkpoint.get('feature_dim', self.feature_dim)
         num_actions = checkpoint.get('num_actions', self.num_actions)

@@ -272,6 +272,8 @@ class PokerAI:
             return
         
         torch.save({
+            'model_type': 'DQN',  # Model type flag
+            'model_version': '1.0',
             'q_network': self.q_network.state_dict(),
             'target_network': self.target_network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
@@ -284,6 +286,11 @@ class PokerAI:
     def load(self, filepath):
         """Load the model"""
         checkpoint = torch.load(filepath, map_location=self.device)
+
+        # Verify it's a DQN model
+        if checkpoint.get('model_type') != 'DQN':
+            print(f"Warning: Expected DQN model, got {checkpoint.get('model_type', 'Unknown')}")
+
         self.config = checkpoint.get('config', self.config)
         self.input_size = checkpoint['input_size']
         self._init_networks(self.input_size)
