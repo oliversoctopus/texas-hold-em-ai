@@ -474,7 +474,14 @@ class ImprovedNeuralEnhancedCFR:
         if current_player == player:
             # Sample action for update player
             action_probs = strategy[valid_actions]
-            action_probs = action_probs / np.sum(action_probs)
+
+            # Handle case where all probabilities are zero or NaN
+            if np.sum(action_probs) <= 0 or np.any(np.isnan(action_probs)):
+                # Use uniform distribution as fallback
+                action_probs = np.ones(len(valid_actions)) / len(valid_actions)
+            else:
+                action_probs = action_probs / np.sum(action_probs)
+
             action_idx = np.random.choice(len(valid_actions), p=action_probs)
             action = valid_actions[action_idx]
 
@@ -509,7 +516,14 @@ class ImprovedNeuralEnhancedCFR:
         else:
             # Sample action for opponent
             action_probs = strategy[valid_actions]
-            action_probs = action_probs / np.sum(action_probs)
+
+            # Handle case where all probabilities are zero or NaN
+            if np.sum(action_probs) <= 0 or np.any(np.isnan(action_probs)):
+                # Use uniform distribution as fallback
+                action_probs = np.ones(len(valid_actions)) / len(valid_actions)
+            else:
+                action_probs = action_probs / np.sum(action_probs)
+
             action_idx = np.random.choice(len(valid_actions), p=action_probs)
             action = valid_actions[action_idx]
 
@@ -608,6 +622,13 @@ class ImprovedNeuralEnhancedCFR:
         total = np.sum(adjusted)
         if total > 0:
             adjusted /= total
+        else:
+            # If all probabilities are zero, use uniform distribution
+            adjusted = np.ones_like(adjusted) / len(adjusted)
+
+        # Final check for NaN values
+        if np.any(np.isnan(adjusted)):
+            adjusted = np.ones_like(adjusted) / len(adjusted)
 
         return adjusted
 
@@ -701,6 +722,10 @@ class ImprovedNeuralEnhancedCFR:
 
             # All-in always available if we have chips
             valid.append(ImprovedAction.ALL_IN.value)
+
+        # Ensure we always have at least fold and check/call
+        if len(valid) == 0:
+            valid = [ImprovedAction.FOLD.value, ImprovedAction.CHECK.value]
 
         return valid
 
