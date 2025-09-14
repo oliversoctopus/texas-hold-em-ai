@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(del \"C:\\Users\\olive\\OneDrive\\Documents\\_Code\\_Fun Projects\\texas_hold_em_ai\\cfr\\adaptive_neural_cfr.py\")",
+      "Bash(python:*)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

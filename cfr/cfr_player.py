@@ -165,27 +165,27 @@ def train_cfr_ai(iterations: int = 10000, num_players: int = 4,
     return cfr_ai
 
 
-def evaluate_cfr_ai(cfr_ai: CFRPokerAI, num_games: int = 100, 
-                    num_players: int = 4, verbose: bool = True, 
+def evaluate_cfr_ai(cfr_ai: CFRPokerAI, num_games: int = 100,
+                    num_players: int = 4, verbose: bool = True,
                     use_random_opponents: bool = False) -> dict:
     """
     Evaluate CFR AI performance using real poker games
-    
+
     Args:
         cfr_ai: Trained CFR AI
         num_games: Number of games to evaluate
         num_players: Number of players per game
         verbose: Whether to print evaluation progress
         use_random_opponents: If True, use random AIs; if False, use strong benchmark models
-        
+
     Returns:
         Dictionary with evaluation results
     """
-    # Import here to avoid circular imports
-    from .cfr_evaluation import evaluate_cfr_ai_real
-    
+    # Use unified evaluation module
+    from evaluation.unified_evaluation import evaluate_cfr_full
+
     if verbose:
         print(f"Evaluating CFR AI over {num_games} real poker games...")
-    
-    # Use real game evaluation
-    return evaluate_cfr_ai_real(cfr_ai, num_games, num_players, verbose, use_random_opponents)
+
+    # Use unified evaluation
+    return evaluate_cfr_full(cfr_ai, num_games, num_players, use_random_opponents, verbose)
