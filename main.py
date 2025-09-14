@@ -18,7 +18,7 @@ def main():
     print("2. Train BASIC 2-Player CFR (Original Neural CFR)")
     print("3. Train CONSERVATIVE 2-Player CFR (Tight Hand-Aware CFR)")
     print("4. Train BALANCED 2-Player CFR (Aggressive Hand-Aware CFR)")
-    print("5. Train STRATEGY-SELECTOR 2-Player CFR (Multi-Strategy Neural Network)")
+    print("5. Train RAW NEURAL 2-Player CFR (End-to-End Learning)")
     print("6. Train Deep CFR (neural network enhanced for 3+ players)")
     print("7. Load existing AI")
     print("8. Play without AI")
@@ -289,48 +289,83 @@ def main():
         print("Balanced CFR AI ready for gameplay!")
 
     elif choice == '5':
-        print("\nSTRATEGY-SELECTOR 2-Player CFR Training (Multi-Strategy Neural Network)")
-        print("Uses neural networks to select between 5 specialized playing strategies")
-        print("Features: Aggressive, Conservative, Balanced, Exploitative, and Deceptive strategies")
+        print("\nRAW NEURAL 2-Player CFR Training (End-to-End Learning)")
+        print("Learns directly from raw game state without manual feature engineering")
+        print("Features: Deep neural networks, attention mechanisms, residual connections")
         print("-" * 60)
 
         # Training configuration
         print("\nSelect training configuration:")
-        print("1. Quick (1,000 iterations - 2-5 minutes)")
-        print("2. Standard (10,000 iterations - 15-30 minutes)")
+        print("1. Quick (5,000 iterations - 5-10 minutes)")
+        print("2. Standard (25,000 iterations - 30-45 minutes)")
         print("3. Professional (50,000 iterations - 1-2 hours)")
         print("4. Custom")
 
         config_choice = input("Choose configuration (1-4): ")
 
         if config_choice == '1':
-            iterations = 1000
+            iterations = 5000
             config_name = "Quick"
         elif config_choice == '2':
-            iterations = 10000
+            iterations = 25000
             config_name = "Standard"
         elif config_choice == '3':
             iterations = 50000
             config_name = "Professional"
         else:
-            iterations = int(input("Number of iterations: ") or "10000")
+            iterations = int(input("Number of iterations: ") or "25000")
             config_name = "Custom"
 
-        print(f"\nTraining Strategy Selector CFR ({config_name} - {iterations:,} iterations)...")
-        print("This version trains 5 different strategies and learns when to use each one.")
+        # Advanced settings
+        learning_rate = 0.001
+        batch_size = 32
+
+        advanced = input("\nConfigure advanced settings? (y/n): ")
+        if advanced.lower() == 'y':
+            lr = input(f"Learning rate (default: {learning_rate}): ")
+            if lr:
+                learning_rate = float(lr)
+            bs = input(f"Batch size (default: {batch_size}): ")
+            if bs:
+                batch_size = int(bs)
+
+        print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
+        print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
+        print("This version learns strategies directly from raw game data.")
         print("Starting training...\n")
 
-        from cfr.strategy_selector_cfr import StrategySelectorCFR
+        from cfr.raw_neural_cfr import RawNeuralCFR
 
         # Create and train
-        cfr_ai = StrategySelectorCFR(iterations=iterations)
+        cfr_ai = RawNeuralCFR(
+            iterations=iterations,
+            learning_rate=learning_rate,
+            batch_size=batch_size
+        )
 
         cfr_ai.train(verbose=True)
+
+        # Evaluate the model
+        eval_choice = input("\nEvaluate Raw Neural CFR? (y/n): ")
+        if eval_choice.lower() == 'y':
+            num_games = int(input("Number of games per opponent type (default: 100): ") or "100")
+
+            print("Testing vs random opponents (baseline)...")
+            random_results = evaluate_cfr_full(cfr_ai, num_games=num_games, num_players=2,
+                                              use_random_opponents=True, verbose=True)
+
+            print("\nTesting vs DQN benchmark models (challenge)...")
+            dqn_results = evaluate_cfr_full(cfr_ai, num_games=num_games, num_players=2,
+                                           use_random_opponents=False, verbose=True)
+
+            print(f"\n[SUMMARY] Raw Neural CFR Evaluation:")
+            print(f"  vs Random opponents: {random_results['win_rate']:.1f}%")
+            print(f"  vs DQN benchmarks: {dqn_results['win_rate']:.1f}%")
 
         # Save model
         save_choice = input("\nSave trained model? (y/n): ")
         if save_choice.lower() == 'y':
-            model_name = f"strategy_selector_{config_name.lower()}.pkl"
+            model_name = f"raw_neural_{config_name.lower()}.pkl"
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
@@ -344,9 +379,9 @@ def main():
 
         # Create wrapper for gameplay
         from utils.model_loader import create_game_wrapper_for_model
-        model_info = {'model_type': 'StrategySelectorCFR'}
+        model_info = {'model_type': 'RawNeuralCFR'}
         ai_model = create_game_wrapper_for_model(cfr_ai, model_info)
-        print("Strategy Selector CFR AI ready for gameplay!")
+        print("Raw Neural CFR AI ready for gameplay!")
 
     elif choice == '6':
         print("\nDeep CFR Training (Neural Network Enhanced)")

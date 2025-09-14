@@ -338,6 +338,50 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
 
         return BalancedNeuralCFRGameWrapper(model)
 
+    elif model_type == 'RawNeuralCFR':
+        class RawNeuralCFRGameWrapper:
+            def __init__(self, cfr_ai):
+                self.cfr_ai = cfr_ai
+                self.epsilon = 0
+
+            def choose_action(self, state, valid_actions, **kwargs):
+                return self.cfr_ai.get_action(
+                    hole_cards=getattr(state, 'hole_cards', []),
+                    community_cards=getattr(state, 'community_cards', []),
+                    pot_size=getattr(state, 'pot_size', 0),
+                    to_call=getattr(state, 'to_call', 0),
+                    stack_size=getattr(state, 'stack_size', 1000),
+                    position=getattr(state, 'position', 0),
+                    num_players=getattr(state, 'num_players', 2),
+                    action_history=getattr(state, 'action_history', [])
+                )
+
+            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
+                # Raw Neural CFR determines its own bet sizing
+                pot_size = getattr(state, 'pot_size', pot)
+                return min(player_chips, int(pot_size * 0.75))  # Default to 75% pot
+
+            def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
+                                 player_bet, num_players, players_in_hand, position=0,
+                                 action_history=None, opponent_bets=None, hand_phase=0):
+                """Create state object for Raw Neural CFR"""
+                class CFRState:
+                    def __init__(self, hand, community_cards, pot, current_bet, player_chips,
+                               player_bet, num_players, action_history, position):
+                        self.hole_cards = hand
+                        self.community_cards = community_cards
+                        self.pot_size = pot
+                        self.to_call = max(0, current_bet - player_bet)
+                        self.stack_size = player_chips
+                        self.position = position
+                        self.num_players = num_players
+                        self.action_history = action_history if action_history else []
+
+                return CFRState(hand, community_cards, pot, current_bet, player_chips,
+                              player_bet, num_players, action_history, position)
+
+        return RawNeuralCFRGameWrapper(model)
+
     elif model_type == 'StrategySelectorCFR':
         class StrategySelectorCFRGameWrapper:
             def __init__(self, cfr_ai):
