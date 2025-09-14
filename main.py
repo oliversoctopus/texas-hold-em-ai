@@ -15,11 +15,12 @@ def main():
     
     print("\n1. Train CFR AI (Counterfactual Regret Minimization)")
     print("2. Train ADVANCED 2-Player CFR (Neural-Enhanced CFR with DQN-competitive performance)")
-    print("3. Train Deep CFR (neural network enhanced for 3+ players)")
-    print("4. Load existing AI")
-    print("5. Play without AI")
+    print("3. Train IMPROVED 2-Player CFR (Hand-Strength-Aware Neural CFR)")
+    print("4. Train Deep CFR (neural network enhanced for 3+ players)")
+    print("5. Load existing AI")
+    print("6. Play without AI")
 
-    choice = input("\nChoose option (1-5): ")
+    choice = input("\nChoose option (1-6): ")
     
     ai_model = None
     
@@ -159,183 +160,73 @@ def main():
         print("Neural-Enhanced CFR AI ready for gameplay!")
 
     elif choice == '3':
-        print("\nProper 2-Player CFR Training (Standard CFR Methodology)")
-        print("Uses standard CFR with equity-based abstractions, diverse scenarios, and game tree traversal")
+        print("\nIMPROVED 2-Player CFR Training (Hand-Strength-Aware)")
+        print("Advanced CFR with explicit hand strength awareness and better convergence")
+        print("Features: Hand category strategies, contextual evaluation, Monte Carlo sampling")
+        print("-" * 60)
 
-        iterations = int(input("CFR iterations (5000-50000 recommended): ") or "10000")
+        # Training configuration
+        print("\nSelect training configuration:")
+        print("1. Quick (1,000 iterations - 2-5 minutes)")
+        print("2. Standard (10,000 iterations - 15-30 minutes)")
+        print("3. Professional (50,000 iterations - 1-2 hours)")
+        print("4. Custom")
 
-        print(f"\nTraining Proper 2-Player CFR AI with {iterations} iterations...")
-        from cfr.proper_cfr_two_player import train_proper_two_player_cfr_ai
+        config_choice = input("Choose configuration (1-4): ")
 
-        cfr_ai = train_proper_two_player_cfr_ai(
+        if config_choice == '1':
+            iterations = 1000
+            config_name = "Quick"
+        elif config_choice == '2':
+            iterations = 10000
+            config_name = "Standard"
+        elif config_choice == '3':
+            iterations = 50000
+            config_name = "Professional"
+        else:
+            iterations = int(input("Number of iterations: ") or "10000")
+            config_name = "Custom"
+
+        print(f"\nTraining Improved Neural-Enhanced CFR ({config_name} - {iterations:,} iterations)...")
+        print("This version understands hand strength and won't bet wildly with weak hands.")
+        print("Starting training...\n")
+
+        from cfr.improved_neural_cfr import ImprovedNeuralEnhancedCFR
+
+        # Create and train
+        cfr_ai = ImprovedNeuralEnhancedCFR(
             iterations=iterations,
-            verbose=True
+            use_neural_networks=True,
+            use_hand_strength=True
         )
 
-        # Evaluate the model
-        eval_choice = input("\nEvaluate Proper 2-Player CFR AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            print("Running evaluation against random opponents...")
-            num_games = int(input("Number of games (default: 100): ") or "100")
-
-            from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
-            results = evaluate_two_player_cfr_ai(cfr_ai, num_games=num_games, verbose=True)
-
-            print(f"\n[SUMMARY] Proper CFR Evaluation Complete:")
-            print(f"  Win rate: {results['win_rate']:.1f}%")
-            print(f"  Strategy coverage: {results.get('strategy_usage', {}).get('learned_percentage', 'N/A')}%")
-
-        # Save model
-        save_choice = input("\nSave Proper 2-Player CFR model? (y/n): ")
-        if save_choice.lower() == 'y':
-            filename = input("Filename (default: proper_two_player_cfr.pkl): ") or "proper_two_player_cfr.pkl"
-            cfr_ai.save(f"models/cfr/{filename}")
-            print(f"Proper 2-Player CFR model saved to models/cfr/{filename}")
-
-        # Create wrapper for gameplay
-        print("\nCreating Proper 2-Player CFR wrapper for gameplay...")
-        class ProperTwoPlayerCFRGameWrapper:
-            def __init__(self, cfr_ai):
-                self.cfr_ai = cfr_ai
-                self.epsilon = 0
-
-            def choose_action(self, state, valid_actions, **kwargs):
-                return self.cfr_ai.get_action(
-                    hole_cards=getattr(state, 'hole_cards', []),
-                    community_cards=getattr(state, 'community_cards', []),
-                    betting_history=getattr(state, 'betting_history', ''),
-                    pot_size=getattr(state, 'pot_size', 0),
-                    to_call=getattr(state, 'to_call', 0),
-                    stack_size=getattr(state, 'stack_size', 1000),
-                    position=getattr(state, 'position', 0),
-                    opponent_stack=kwargs.get('opponent_stack', 1000)
-                )
-
-            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
-                return max(min_raise, max(50, pot // 2))
-
-        ai_model = ProperTwoPlayerCFRGameWrapper(cfr_ai)
-        print("Proper 2-Player CFR AI ready for 2-player gameplay!")
-
-    elif choice == '4':
-        print("\nSimple 2-Player CFR Training (Fixed Action Set)")
-        print("Uses equity-based hand evaluation and fixed action abstractions for stability")
-
-        iterations = int(input("CFR iterations (5000-50000 recommended): ") or "10000")
-
-        print(f"\nTraining Simple 2-Player CFR AI with {iterations} iterations...")
-        from cfr.simple_cfr_two_player import train_simple_two_player_cfr_ai
-
-        cfr_ai = train_simple_two_player_cfr_ai(
-            iterations=iterations,
-            verbose=True
-        )
-
-        # Evaluate the model
-        eval_choice = input("\nEvaluate Simple 2-Player CFR AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            print("Running evaluation against random opponents...")
-            num_games = int(input("Number of games (default: 100): ") or "100")
-
-            from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
-            results = evaluate_two_player_cfr_ai(cfr_ai, num_games=num_games, verbose=True)
-
-            print(f"\n[SUMMARY] Simple CFR Evaluation Complete:")
-            print(f"  Win rate: {results['win_rate']:.1f}%")
-            print(f"  Strategy coverage: {results.get('strategy_usage', {}).get('learned_percentage', 'N/A')}%")
-
-        # Save model
-        save_choice = input("\nSave Simple 2-Player CFR model? (y/n): ")
-        if save_choice.lower() == 'y':
-            filename = input("Filename (default: simple_two_player_cfr.pkl): ") or "simple_two_player_cfr.pkl"
-            cfr_ai.save(f"models/cfr/{filename}")
-            print(f"Simple 2-Player CFR model saved to models/cfr/{filename}")
-
-        # Create wrapper for gameplay
-        print("\nCreating Simple 2-Player CFR wrapper for gameplay...")
-        class SimpleTwoPlayerCFRGameWrapper:
-            def __init__(self, cfr_ai):
-                self.cfr_ai = cfr_ai
-                self.epsilon = 0
-
-            def choose_action(self, state, valid_actions, **kwargs):
-                return self.cfr_ai.get_action(
-                    hole_cards=getattr(state, 'hole_cards', []),
-                    community_cards=getattr(state, 'community_cards', []),
-                    betting_history=getattr(state, 'betting_history', ''),
-                    pot_size=getattr(state, 'pot_size', 0),
-                    to_call=getattr(state, 'to_call', 0),
-                    stack_size=getattr(state, 'stack_size', 1000),
-                    position=getattr(state, 'position', 0)
-                )
-
-            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
-                return max(min_raise, max(50, pot // 2))
-
-        ai_model = SimpleTwoPlayerCFRGameWrapper(cfr_ai)
-        print("Simple 2-Player CFR AI ready for 2-player gameplay!")
-
-    elif choice == '5':
-        print("\nFixed Enhanced 2-Player CFR Training (Monte Carlo CFR)")
-        print("Uses proven Monte Carlo CFR with timeout protection and comprehensive information sets")
-
-        iterations = int(input("CFR iterations (100-1000 recommended): ") or "500")
-
-        print(f"\nTraining Fixed Enhanced 2-Player CFR AI with {iterations} iterations...")
-        from cfr.fixed_enhanced_cfr_two_player import FixedEnhancedTwoPlayerCFR
-
-        cfr_ai = FixedEnhancedTwoPlayerCFR(iterations=iterations)
         cfr_ai.train(verbose=True)
 
-        # Evaluate the model
-        eval_choice = input("\nEvaluate Fixed Enhanced 2-Player CFR AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            print("Running evaluation against random opponents...")
-            num_games = int(input("Number of games (default: 100): ") or "100")
-
-            from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
-            results = evaluate_two_player_cfr_ai(cfr_ai, num_games=num_games, verbose=True)
-
-            print(f"\n[SUMMARY] Fixed Enhanced CFR Evaluation Complete:")
-            print(f"  Win rate: {results['win_rate']:.1f}%")
-            print(f"  Strategy coverage: {results.get('strategy_usage', {}).get('learned_percentage', 'N/A')}%")
-
         # Save model
-        save_choice = input("\nSave Fixed Enhanced 2-Player CFR model? (y/n): ")
+        save_choice = input("\nSave trained model? (y/n): ")
         if save_choice.lower() == 'y':
-            filename = input("Filename (default: fixed_enhanced_two_player_cfr.pkl): ") or "fixed_enhanced_two_player_cfr.pkl"
-            cfr_ai.save(f"models/cfr/{filename}")
-            print(f"Fixed Enhanced 2-Player CFR model saved to models/cfr/{filename}")
+            model_name = f"improved_cfr_{config_name.lower()}.pkl"
+            filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
+
+            # Ensure directory exists
+            import os
+            dirname = os.path.dirname(filename)
+            if dirname and not os.path.exists(dirname):
+                os.makedirs(dirname)
+
+            cfr_ai.save(filename)
+            print(f"Model saved to {filename}")
 
         # Create wrapper for gameplay
-        print("\nCreating Fixed Enhanced 2-Player CFR wrapper for gameplay...")
-        class FixedEnhancedTwoPlayerCFRGameWrapper:
-            def __init__(self, cfr_ai):
-                self.cfr_ai = cfr_ai
-                self.epsilon = 0
+        from utils.model_loader import create_game_wrapper_for_model
+        model_info = {'model_type': 'ImprovedNeuralEnhancedCFR'}
+        ai_model = create_game_wrapper_for_model(cfr_ai, model_info)
+        print("Improved Neural-Enhanced CFR AI ready for gameplay!")
 
-            def choose_action(self, state, valid_actions, **kwargs):
-                return self.cfr_ai.get_action(
-                    hole_cards=getattr(state, 'hole_cards', []),
-                    community_cards=getattr(state, 'community_cards', []),
-                    betting_history=getattr(state, 'betting_history', ''),
-                    pot_size=getattr(state, 'pot_size', 0),
-                    to_call=getattr(state, 'to_call', 0),
-                    stack_size=getattr(state, 'stack_size', 1000),
-                    position=getattr(state, 'position', 0),
-                    opponent_stack=kwargs.get('opponent_stack', 1000)
-                )
-
-            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
-                return max(min_raise, max(50, pot // 2))
-
-        ai_model = FixedEnhancedTwoPlayerCFRGameWrapper(cfr_ai)
-        print("Fixed Enhanced 2-Player CFR AI ready for 2-player gameplay!")
-
-    elif choice == '3':
+    elif choice == '4':
         print("\nDeep CFR Training (Neural Network Enhanced)")
         print("Uses neural networks to approximate optimal strategies for 3+ players")
-        
+
         iterations = int(input("Deep CFR iterations (5000-20000 recommended): ") or "10000")
         players = int(input("Number of players for training (3-6): ") or "4")
         
@@ -393,91 +284,8 @@ def main():
                 return self.cfr_player.get_raise_size(game_state)
         
         ai_model = DeepCFRWrapper(cfr_player)
-
-    elif choice == '7':
-        print("\n⚠️  [DEPRECATED] DQN Training with Strategy Diversity")
-        print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
-        print("Skipping DQN training. Please use options 1-5 for modern AI training.")
-
-    elif choice == '8':
-        print("\n[DEPRECATED] Hyperparameter tuning")
-        print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
-        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1500")
-        players = int(input("Number of players for training (2-6): ") or "4")
-        
-        print(f"\nTraining against pre-trained strong opponents...")
-        from training import train_ai_vs_strong_opponents
-        ai_model = train_ai_vs_strong_opponents(
-            num_episodes=episodes,
-            num_players=players
-        )
-        
-        # Evaluate
-        eval_choice = input("\nEvaluate AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            evaluate_ai_full(ai_model, num_games=10000, num_players=players, use_strong_opponents=True)
-        
-        # Save
-        save_choice = input("\nSave model? (y/n): ")
-        if save_choice.lower() == 'y':
-            filename = input("Filename (default: vs_strong_ai.pth): ") or "vs_strong_ai.pth"
-            ai_model.save(filename)
-            print(f"Model saved to {filename}")
-
-    elif choice == '9':
-        print("\n[DEPRECATED] Training with strategy diversity (prevents all-in spam)")
-        print("WARNING: DQN training is deprecated. Use CFR or Deep CFR instead.")
-        
-        # Check if strategy bots exist
-        strategy_bots = load_strategy_bots('strategy_bots')
-        if not strategy_bots:
-            create_bots = input("Strategy bots not found. Create them now? (y/n): ")
-            if create_bots.lower() == 'y':
-                print("\nCreating strategy bots...")
-                create_all_strategy_bots(save_dir='strategy_bots', episodes=300)
-            else:
-                print("Training without strategy bots...")
-        
-        episodes = int(input("Training episodes (1000-3000 recommended): ") or "1000")
-        players = int(input("Number of players for training (2-6): ") or "4")
-        
-        # Configuration for balanced play
-        config = {
-            'learning_rate': 0.0005,
-            'gamma': 0.95,
-            'epsilon': 0.5,
-            'hidden_sizes': [256, 128],
-            'dropout_rate': 0.2,
-            'batch_size': 64,
-            'update_target_every': 150,
-            'min_epsilon': 0.05,
-            'epsilon_decay': 0.997
-        }
-        
-        print(f"\nTraining with strategy diversity...")
-        from training import train_ai_with_strategy_diversity
-        ai_model = train_ai_with_strategy_diversity(
-            num_episodes=episodes, 
-            config=config,
-            num_players=players,
-            use_strategy_bots=True
-        )
-        
-        # Evaluate
-        eval_choice = input("\nEvaluate AI? (y/n): ")
-        if eval_choice.lower() == 'y':
-            # Test against strategy bots
-            print("\nEvaluating against strategy bots...")
-            evaluate_ai_full(ai_model, num_games=100, num_players=players, use_strong_opponents=True)
-        
-        # Save
-        save_choice = input("\nSave model? (y/n): ")
-        if save_choice.lower() == 'y':
-            filename = input("Filename (default: balanced_poker_ai.pth): ") or "balanced_poker_ai.pth"
-            ai_model.save(filename)
-            print(f"Model saved to {filename}")
             
-    elif choice == '4':
+    elif choice == '5':
         filename = input("Model filename (.pth for DQN/Deep CFR, .pkl for CFR, default: poker_ai.pth): ") or "poker_ai.pth"
 
         # Check if it's a CFR model (.pkl) or DQN model (.pth)
@@ -743,7 +551,7 @@ def main():
                 print("Starting with untrained AI")
                 ai_model = None
     
-    elif choice == '5':
+    elif choice == '6':
         print("Playing without AI training")
         ai_model = None
 
