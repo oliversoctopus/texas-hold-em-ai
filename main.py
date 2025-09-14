@@ -13,14 +13,15 @@ def main():
     print("TEXAS HOLD'EM with Advanced PyTorch AI")
     print("=" * 60)
     
-    print("\n1. Train CFR AI (Counterfactual Regret Minimization)")
-    print("2. Train ADVANCED 2-Player CFR (Neural-Enhanced CFR with DQN-competitive performance)")
-    print("3. Train IMPROVED 2-Player CFR (Hand-Strength-Aware Neural CFR)")
-    print("4. Train Deep CFR (neural network enhanced for 3+ players)")
-    print("5. Load existing AI")
-    print("6. Play without AI")
+    print("\n1. Train CFR AI (Multi-player Counterfactual Regret)")
+    print("2. Train BASIC 2-Player CFR (Original Neural CFR)")
+    print("3. Train CONSERVATIVE 2-Player CFR (Tight Hand-Aware CFR)")
+    print("4. Train BALANCED 2-Player CFR (Aggressive Hand-Aware CFR)")
+    print("5. Train Deep CFR (neural network enhanced for 3+ players)")
+    print("6. Load existing AI")
+    print("7. Play without AI")
 
-    choice = input("\nChoose option (1-6): ")
+    choice = input("\nChoose option (1-7): ")
     
     ai_model = None
     
@@ -90,9 +91,9 @@ def main():
         ai_model = CFRWrapper(cfr_player)
         
     elif choice == '2':
-        print("\nADVANCED 2-Player CFR Training (Neural-Enhanced CFR)")
-        print("State-of-the-art CFR with neural networks and DQN-competitive performance")
-        print("Features: Advanced poker abstractions, progressive training, neural strategy approximation")
+        print("\nBASIC 2-Player CFR Training (Original Neural CFR)")
+        print("Original Neural-Enhanced CFR with basic strategy learning")
+        print("Features: Neural networks, progressive training, but may bet wildly")
 
         # Training configuration
         print("\nTraining Options:")
@@ -160,9 +161,9 @@ def main():
         print("Neural-Enhanced CFR AI ready for gameplay!")
 
     elif choice == '3':
-        print("\nIMPROVED 2-Player CFR Training (Hand-Strength-Aware)")
-        print("Advanced CFR with explicit hand strength awareness and better convergence")
-        print("Features: Hand category strategies, contextual evaluation, Monte Carlo sampling")
+        print("\nCONSERVATIVE 2-Player CFR Training (Tight Play Style)")
+        print("Hand-strength-aware CFR that plays tight and conservative")
+        print("Features: Strong hand evaluation, careful betting, minimal bluffing")
         print("-" * 60)
 
         # Training configuration
@@ -221,9 +222,73 @@ def main():
         from utils.model_loader import create_game_wrapper_for_model
         model_info = {'model_type': 'ImprovedNeuralEnhancedCFR'}
         ai_model = create_game_wrapper_for_model(cfr_ai, model_info)
-        print("Improved Neural-Enhanced CFR AI ready for gameplay!")
+        print("Conservative CFR AI ready for gameplay!")
 
     elif choice == '4':
+        print("\nBALANCED 2-Player CFR Training (Aggressive Play Style)")
+        print("Hand-strength-aware CFR with balanced aggressive play")
+        print("Features: Wider ranges, more bluffing, position-aware aggression")
+        print("-" * 60)
+
+        # Training configuration
+        print("\nSelect training configuration:")
+        print("1. Quick (1,000 iterations - 2-5 minutes)")
+        print("2. Standard (10,000 iterations - 15-30 minutes)")
+        print("3. Professional (50,000 iterations - 1-2 hours)")
+        print("4. Custom")
+
+        config_choice = input("Choose configuration (1-4): ")
+
+        if config_choice == '1':
+            iterations = 1000
+            config_name = "Quick"
+        elif config_choice == '2':
+            iterations = 10000
+            config_name = "Standard"
+        elif config_choice == '3':
+            iterations = 50000
+            config_name = "Professional"
+        else:
+            iterations = int(input("Number of iterations: ") or "10000")
+            config_name = "Custom"
+
+        print(f"\nTraining Balanced Neural CFR ({config_name} - {iterations:,} iterations)...")
+        print("This version plays more aggressively with wider ranges and more bluffs.")
+        print("Starting training...\n")
+
+        from cfr.balanced_neural_cfr import BalancedNeuralCFR
+
+        # Create and train
+        cfr_ai = BalancedNeuralCFR(
+            iterations=iterations,
+            use_neural_networks=True,
+            use_hand_strength=True
+        )
+
+        cfr_ai.train(verbose=True)
+
+        # Save model
+        save_choice = input("\nSave trained model? (y/n): ")
+        if save_choice.lower() == 'y':
+            model_name = f"balanced_cfr_{config_name.lower()}.pkl"
+            filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
+
+            # Ensure directory exists
+            import os
+            dirname = os.path.dirname(filename)
+            if dirname and not os.path.exists(dirname):
+                os.makedirs(dirname)
+
+            cfr_ai.save(filename)
+            print(f"Model saved to {filename}")
+
+        # Create wrapper for gameplay
+        from utils.model_loader import create_game_wrapper_for_model
+        model_info = {'model_type': 'BalancedNeuralCFR'}
+        ai_model = create_game_wrapper_for_model(cfr_ai, model_info)
+        print("Balanced CFR AI ready for gameplay!")
+
+    elif choice == '6':
         print("\nDeep CFR Training (Neural Network Enhanced)")
         print("Uses neural networks to approximate optimal strategies for 3+ players")
 
@@ -285,7 +350,7 @@ def main():
         
         ai_model = DeepCFRWrapper(cfr_player)
             
-    elif choice == '5':
+    elif choice == '6':
         filename = input("Model filename (.pth for DQN/Deep CFR, .pkl for CFR, default: poker_ai.pth): ") or "poker_ai.pth"
 
         # Check if it's a CFR model (.pkl) or DQN model (.pth)
@@ -551,7 +616,7 @@ def main():
                 print("Starting with untrained AI")
                 ai_model = None
     
-    elif choice == '6':
+    elif choice == '7':
         print("Playing without AI training")
         ai_model = None
 
