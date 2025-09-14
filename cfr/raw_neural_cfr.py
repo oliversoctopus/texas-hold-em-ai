@@ -1,6 +1,6 @@
 """
 Raw Neural CFR for 2-Player Texas Hold'em
-Learns directly from raw game state without manual feature engineering
+Learns directly from raw game state with proper CFR and exploration
 """
 
 import torch
@@ -11,6 +11,7 @@ import numpy as np
 import random
 import pickle
 import time
+import math
 from collections import defaultdict, deque
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum
@@ -140,6 +141,9 @@ class RawNeuralCFRNetwork(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
+        # Initialize weights properly
+        self._init_weights()
+
     def _make_residual_block(self, hidden_dim: int) -> nn.Module:
         """Create a residual block"""
         return nn.Sequential(
@@ -150,6 +154,16 @@ class RawNeuralCFRNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim)
         )
+
+    def _init_weights(self):
+        """Initialize weights to prevent folding bias"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Use Xavier initialization
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    # Initialize bias to zero (no action preference)
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, game_state: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the network"""
@@ -254,25 +268,34 @@ class RawNeuralCFRNetwork(nn.Module):
 
 
 class RawNeuralCFR:
-    """Raw Neural CFR trainer and player"""
+    """Raw Neural CFR with proper exploration and CFR algorithm"""
 
     def __init__(self, iterations: int = 50000, learning_rate: float = 0.001,
-                 batch_size: int = 32, buffer_size: int = 100000):
+                 batch_size: int = 32, buffer_size: int = 100000,
+                 initial_epsilon: float = 0.3, final_epsilon: float = 0.05,
+                 initial_temperature: float = 1.0, final_temperature: float = 0.1):
         self.iterations = iterations
         self.learning_rate = learning_rate
         self.batch_size = batch_size
 
+        # Exploration parameters
+        self.initial_epsilon = initial_epsilon
+        self.final_epsilon = final_epsilon
+        self.epsilon = initial_epsilon
+
+        # Temperature for action sampling
+        self.initial_temperature = initial_temperature
+        self.final_temperature = final_temperature
+        self.temperature = initial_temperature
+
         # Neural network
         self.network = RawNeuralCFRNetwork()
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=iterations, eta_min=learning_rate * 0.01
-        )
 
         # Target network for stability
         self.target_network = RawNeuralCFRNetwork()
         self.target_network.load_state_dict(self.network.state_dict())
-        self.update_target_every = 1000
+        self.update_target_every = 2000
 
         # Experience replay buffer
         self.experience_buffer = deque(maxlen=buffer_size)
@@ -280,13 +303,16 @@ class RawNeuralCFR:
         # CFR tracking
         self.regret_sum = defaultdict(lambda: np.zeros(8))
         self.strategy_sum = defaultdict(lambda: np.zeros(8))
+        self.iteration_count = 0
 
         # Training statistics
         self.training_stats = {
             'iterations': [],
             'avg_regret': [],
             'avg_utility': [],
-            'loss': []
+            'loss': [],
+            'epsilon': [],
+            'temperature': []
         }
 
     def train(self, verbose: bool = True):
@@ -294,44 +320,52 @@ class RawNeuralCFR:
         if verbose:
             print("Starting Raw Neural CFR Training")
             print(f"Iterations: {self.iterations}")
-            print(f"Learning rate: {self.learning_rate}")
-            print(f"Batch size: {self.batch_size}")
+            print(f"Initial epsilon: {self.initial_epsilon} -> {self.final_epsilon}")
+            print(f"Initial temperature: {self.initial_temperature} -> {self.final_temperature}")
             print("=" * 60)
 
         start_time = time.time()
 
         for iteration in range(self.iterations):
-            # Sample game trajectory
+            self.iteration_count = iteration
+
+            # Update exploration parameters
+            progress = iteration / self.iterations
+            self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
+            self.temperature = self.initial_temperature - (self.initial_temperature - self.final_temperature) * progress
+
+            # Sample game trajectory with exploration
             trajectory = self._sample_game_trajectory()
+
+            # Calculate advantages and update regrets
+            self._update_regrets(trajectory)
 
             # Store experiences
             for experience in trajectory:
                 self.experience_buffer.append(experience)
 
             # Train on batch when buffer is large enough
-            if len(self.experience_buffer) >= self.batch_size:
+            if len(self.experience_buffer) >= self.batch_size * 2:
                 loss = self._train_on_batch()
                 self.training_stats['loss'].append(loss)
-
-                # Update learning rate after optimizer.step() (called in _train_on_batch)
-                self.scheduler.step()
 
             # Update target network periodically
             if iteration % self.update_target_every == 0:
                 self.target_network.load_state_dict(self.network.state_dict())
 
             # Progress update
-            if verbose and iteration % (self.iterations // 20) == 0:
+            if verbose and iteration % max(1, self.iterations // 20) == 0:
                 elapsed = time.time() - start_time
                 avg_loss = np.mean(self.training_stats['loss'][-100:]) if self.training_stats['loss'] else 0
                 print(f"Iteration {iteration}/{self.iterations} | "
-                      f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f}")
+                      f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
+                      f"ε: {self.epsilon:.3f} | T: {self.temperature:.2f}")
 
         if verbose:
             print(f"\nTraining complete in {time.time() - start_time:.1f} seconds")
 
     def _sample_game_trajectory(self) -> List[Dict]:
-        """Sample a complete game trajectory"""
+        """Sample a complete game trajectory with exploration"""
         trajectory = []
 
         # Initialize game state
@@ -340,6 +374,9 @@ class RawNeuralCFR:
         # Deal hole cards
         p1_cards = [deck.draw(), deck.draw()]
         p2_cards = [deck.draw(), deck.draw()]
+
+        # Track starting chips for utility calculation
+        starting_chips = [1000, 1000]
 
         game_state = {
             'hole_cards': p1_cards,  # Current player's cards
@@ -375,24 +412,15 @@ class RawNeuralCFR:
             num_actions = 0
 
             while not betting_complete and num_actions < 10:  # Max 10 actions per round
-                # Get action from network
-                with torch.no_grad():
-                    strategy, value = self.network(game_state)
-                    action_probs = F.softmax(strategy, dim=0)
-
-                # Sample action
-                valid_actions = game_state['legal_actions']
-                masked_probs = action_probs * torch.FloatTensor(valid_actions)
-                masked_probs = masked_probs / masked_probs.sum()
-
-                action = torch.multinomial(masked_probs, 1).item()
+                # Get action with exploration
+                action, action_probs = self._get_action_with_exploration(game_state)
 
                 # Store experience
                 experience = {
                     'state': game_state.copy(),
                     'action': action,
-                    'value': value.item(),
-                    'action_probs': action_probs.numpy()
+                    'action_probs': action_probs,
+                    'player': game_state['current_player']
                 }
                 trajectory.append(experience)
 
@@ -413,17 +441,94 @@ class RawNeuralCFR:
             if active_count <= 1:
                 break
 
-        # Calculate utilities
+        # Calculate utilities based on actual money won/lost
         winner = self._determine_winner(game_state, p1_cards, p2_cards)
-        pot = game_state['pot']
+        final_stacks = game_state['stacks']
 
-        for i, exp in enumerate(trajectory):
-            if exp['state']['current_player'] == winner:
-                exp['utility'] = pot / 2  # Simplified utility
-            else:
-                exp['utility'] = -pot / 2
+        # Calculate utility for each player (money won/lost)
+        utilities = [
+            final_stacks[0] - starting_chips[0],
+            final_stacks[1] - starting_chips[1]
+        ]
+
+        # Add utilities to experiences
+        for exp in trajectory:
+            player = exp['player']
+            exp['utility'] = utilities[player]
+            exp['baseline'] = 0  # Will be updated with value network
 
         return trajectory
+
+    def _get_action_with_exploration(self, game_state: Dict) -> Tuple[int, np.ndarray]:
+        """Get action using epsilon-greedy and temperature sampling"""
+        with torch.no_grad():
+            strategy, value = self.network(game_state)
+
+            # Apply temperature to logits
+            strategy = strategy / self.temperature
+
+            # Convert to probabilities
+            action_probs = F.softmax(strategy, dim=0).numpy()
+
+            # Apply legal action mask
+            legal_actions = np.array(game_state['legal_actions'])
+            action_probs = action_probs * legal_actions
+
+            # Renormalize
+            if action_probs.sum() > 0:
+                action_probs = action_probs / action_probs.sum()
+            else:
+                # If no legal actions (shouldn't happen), uniform over legal
+                action_probs = legal_actions / legal_actions.sum()
+
+            # Epsilon-greedy exploration
+            if random.random() < self.epsilon:
+                # Random action from legal actions
+                legal_indices = np.where(legal_actions > 0)[0]
+                action = np.random.choice(legal_indices)
+            else:
+                # Sample from distribution
+                action = np.random.choice(len(action_probs), p=action_probs)
+
+        return action, action_probs
+
+    def _update_regrets(self, trajectory: List[Dict]):
+        """Update regrets using CFR algorithm"""
+        # Calculate advantages
+        for exp in trajectory:
+            state = exp['state']
+            action = exp['action']
+            utility = exp['utility']
+
+            # Create state key for regret tracking
+            state_key = self._get_state_key(state)
+
+            # Update regret for this action
+            self.regret_sum[state_key][action] += utility
+
+            # CFR+ : Set negative regrets to 0
+            self.regret_sum[state_key] = np.maximum(self.regret_sum[state_key], 0)
+
+            # Update strategy sum for averaging
+            if self.regret_sum[state_key].sum() > 0:
+                strategy = self.regret_sum[state_key] / self.regret_sum[state_key].sum()
+            else:
+                strategy = np.ones(8) / 8  # Uniform
+
+            self.strategy_sum[state_key] += strategy
+
+    def _get_state_key(self, state: Dict) -> str:
+        """Create a key for the state (information set)"""
+        # Simplified state key based on cards and stage
+        hole_cards = state.get('hole_cards', [])
+        community_cards = state.get('community_cards', [])
+        stage = state.get('stage', 0)
+
+        # Convert cards to string representation
+        hole_str = ''.join([f"{c.rank}{c.suit}" if c else "XX" for c in hole_cards])
+        comm_str = ''.join([f"{c.rank}{c.suit}" if c else "XX" for c in community_cards])
+
+        return f"{hole_str}|{comm_str}|{stage}"
 
     def _apply_action(self, game_state: Dict, action: int) -> Dict:
         """Apply an action to the game state"""
@@ -432,18 +537,25 @@ class RawNeuralCFR:
 
         if action == CFRAction.FOLD.value:
             new_state['active_players'][player] = False
+            # Opponent wins the pot
+            opponent = 1 - player
+            new_state['stacks'][opponent] += new_state['pot']
+            new_state['pot'] = 0
         elif action == CFRAction.CHECK.value:
             pass  # No change
         elif action == CFRAction.CALL.value:
             call_amount = max(game_state['current_bets']) - game_state['current_bets'][player]
+            call_amount = min(call_amount, new_state['stacks'][player])  # Can't bet more than stack
             new_state['current_bets'][player] += call_amount
             new_state['stacks'][player] -= call_amount
             new_state['pot'] += call_amount
         else:  # Betting actions
             bet_size = self._get_bet_size(action, game_state)
-            new_state['current_bets'][player] = bet_size
-            new_state['stacks'][player] -= bet_size - game_state['current_bets'][player]
-            new_state['pot'] += bet_size - game_state['current_bets'][player]
+            bet_amount = min(bet_size, new_state['stacks'][player])  # Can't bet more than stack
+            raise_amount = bet_amount - game_state['current_bets'][player]
+            new_state['current_bets'][player] = bet_amount
+            new_state['stacks'][player] -= raise_amount
+            new_state['pot'] += raise_amount
 
         # Update action history
         new_state['action_history'].append(action)
@@ -532,10 +644,17 @@ class RawNeuralCFR:
         p1_hand = evaluate_hand(p1_cards + community)
         p2_hand = evaluate_hand(p2_cards + community)
 
-        return 0 if p1_hand > p2_hand else 1
+        winner = 0 if p1_hand > p2_hand else 1
+
+        # Distribute pot to winner
+        if game_state['pot'] > 0:
+            game_state['stacks'][winner] += game_state['pot']
+            game_state['pot'] = 0
+
+        return winner
 
     def _train_on_batch(self) -> float:
-        """Train network on a batch of experiences"""
+        """Train network on a batch using policy gradient"""
         # Sample batch
         batch = random.sample(self.experience_buffer, self.batch_size)
 
@@ -549,13 +668,26 @@ class RawNeuralCFR:
             # Forward pass
             strategy, value = self.network(game_state)
 
-            # Calculate losses
-            strategy_loss = F.cross_entropy(strategy.unsqueeze(0),
-                                           torch.LongTensor([action]))
+            # Get baseline from value network
+            baseline = value.item()
+
+            # Calculate advantage
+            advantage = utility - baseline
+
+            # Policy gradient loss
+            log_probs = F.log_softmax(strategy, dim=0)
+            policy_loss = -log_probs[action] * advantage
+
+            # Value loss
             value_loss = F.mse_loss(value, torch.FloatTensor([utility]))
 
+            # Entropy regularization for exploration
+            probs = F.softmax(strategy, dim=0)
+            entropy = -(probs * log_probs).sum()
+            entropy_bonus = -0.01 * entropy  # Negative because we want to maximize entropy
+
             # Combined loss
-            loss = strategy_loss + 0.5 * value_loss
+            loss = policy_loss + 0.5 * value_loss + entropy_bonus
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -568,7 +700,7 @@ class RawNeuralCFR:
         return total_loss / self.batch_size
 
     def get_action(self, **kwargs) -> Action:
-        """Get action for gameplay"""
+        """Get action for gameplay (uses average strategy)"""
         # Create game state from kwargs
         game_state = {
             'hole_cards': kwargs.get('hole_cards', []),
@@ -584,13 +716,19 @@ class RawNeuralCFR:
             'legal_actions': [1] * 8
         }
 
-        # Get strategy from network
-        with torch.no_grad():
-            strategy, _ = self.network(game_state)
-            action_probs = F.softmax(strategy, dim=0)
+        # Get state key
+        state_key = self._get_state_key(game_state)
 
-        # Sample action
-        action_idx = torch.multinomial(action_probs, 1).item()
+        # Use average strategy if available
+        if state_key in self.strategy_sum and self.strategy_sum[state_key].sum() > 0:
+            strategy = self.strategy_sum[state_key] / self.strategy_sum[state_key].sum()
+            action_idx = np.random.choice(len(strategy), p=strategy)
+        else:
+            # Fall back to network prediction
+            with torch.no_grad():
+                strategy, _ = self.network(game_state)
+                action_probs = F.softmax(strategy, dim=0)
+                action_idx = torch.multinomial(action_probs, 1).item()
 
         # Convert to game action
         if action_idx == CFRAction.FOLD.value:
@@ -607,8 +745,11 @@ class RawNeuralCFR:
         checkpoint = {
             'network_state': self.network.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
+            'regret_sum': dict(self.regret_sum),
+            'strategy_sum': dict(self.strategy_sum),
             'training_stats': self.training_stats,
-            'iterations': self.iterations
+            'iterations': self.iterations,
+            'iteration_count': self.iteration_count
         }
         with open(filename, 'wb') as f:
             pickle.dump(checkpoint, f)
@@ -620,5 +761,8 @@ class RawNeuralCFR:
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
+        self.regret_sum = defaultdict(lambda: np.zeros(8), checkpoint['regret_sum'])
+        self.strategy_sum = defaultdict(lambda: np.zeros(8), checkpoint['strategy_sum'])
         self.training_stats = checkpoint['training_stats']
         self.iterations = checkpoint['iterations']
+        self.iteration_count = checkpoint.get('iteration_count', 0)
