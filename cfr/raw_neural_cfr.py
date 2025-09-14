@@ -313,12 +313,12 @@ class RawNeuralCFR:
                 loss = self._train_on_batch()
                 self.training_stats['loss'].append(loss)
 
+                # Update learning rate after optimizer.step() (called in _train_on_batch)
+                self.scheduler.step()
+
             # Update target network periodically
             if iteration % self.update_target_every == 0:
                 self.target_network.load_state_dict(self.network.state_dict())
-
-            # Update learning rate
-            self.scheduler.step()
 
             # Progress update
             if verbose and iteration % (self.iterations // 20) == 0:
@@ -358,11 +358,15 @@ class RawNeuralCFR:
         # Play through the hand
         for stage in range(4):  # Preflop, flop, turn, river
             if stage == 1:  # Flop
-                game_state['community_cards'] = [deck.draw(), deck.draw(), deck.draw()]
+                game_state['community_cards'] = deck.draw(3)  # Draw 3 cards as a list
             elif stage == 2:  # Turn
-                game_state['community_cards'].append(deck.draw())
+                turn_card = deck.draw()  # Draw single card
+                if turn_card:
+                    game_state['community_cards'].append(turn_card)
             elif stage == 3:  # River
-                game_state['community_cards'].append(deck.draw())
+                river_card = deck.draw()  # Draw single card
+                if river_card:
+                    game_state['community_cards'].append(river_card)
 
             game_state['stage'] = stage
 
@@ -513,7 +517,18 @@ class RawNeuralCFR:
             return 0
 
         # Evaluate hands
-        community = game_state['community_cards']
+        community = game_state.get('community_cards', [])
+
+        # Filter out None values and ensure we have valid cards
+        community = [c for c in community if c is not None]
+        p1_cards = [c for c in p1_cards if c is not None]
+        p2_cards = [c for c in p2_cards if c is not None]
+
+        # Need at least 2 hole cards to evaluate
+        if len(p1_cards) < 2 or len(p2_cards) < 2:
+            return 0  # Default winner if cards are invalid
+
+        # Evaluate hands with available cards
         p1_hand = evaluate_hand(p1_cards + community)
         p2_hand = evaluate_hand(p2_cards + community)
 
