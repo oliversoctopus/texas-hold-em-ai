@@ -296,21 +296,21 @@ def main():
 
         # Training configuration
         print("\nSelect training configuration:")
-        print("1. Quick (5,000 iterations - 5-10 minutes)")
-        print("2. Standard (25,000 iterations - 30-45 minutes)")
-        print("3. Professional (50,000 iterations - 1-2 hours)")
+        print("1. Quick (500 iterations - ~20 minutes)")
+        print("2. Standard (2,000 iterations - ~1.5 hours)")
+        print("3. Professional (5,000 iterations - ~3-4 hours)")
         print("4. Custom")
 
         config_choice = input("Choose configuration (1-4): ")
 
         if config_choice == '1':
-            iterations = 5000
+            iterations = 500
             config_name = "Quick"
         elif config_choice == '2':
-            iterations = 25000
+            iterations = 2000
             config_name = "Standard"
         elif config_choice == '3':
-            iterations = 50000
+            iterations = 5000
             config_name = "Professional"
         else:
             iterations = int(input("Number of iterations: ") or "25000")

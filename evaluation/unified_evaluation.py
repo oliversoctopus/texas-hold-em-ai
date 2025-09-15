@@ -128,6 +128,8 @@ class UnifiedEvaluator:
             chips_change = final_chips - test_start_chips
             total_earnings += chips_change
 
+            # Removed debug output - issue fixed
+
             if final_chips > 0:
                 games_survived += 1
 
@@ -250,6 +252,8 @@ class UnifiedEvaluator:
             chips_change = final_chips - test_start_chips
             total_earnings += chips_change
 
+            # Removed debug output - issue fixed
+
             if final_chips > 0:
                 games_survived += 1
 
@@ -349,8 +353,18 @@ class UnifiedEvaluator:
 
         # Find winner
         max_chips = max(player.chips for player in game.players)
-        winners = [i for i, player in enumerate(game.players) if player.chips == max_chips]
-        winner_idx = random.choice(winners) if winners else -1
+        if max_chips > 0:
+            # Only declare a winner if someone has chips
+            winners = [i for i, player in enumerate(game.players) if player.chips == max_chips]
+            winner_idx = random.choice(winners) if winners else -1
+        else:
+            # No winner if everyone has 0 chips (draw/tie)
+            print(f"\n[EVALUATION WARNING] All players have 0 chips at game end!")
+            print(f"  This indicates a bug in the game engine.")
+            print(f"  Player chips: {[p.chips for p in game.players]}")
+            print(f"  Hands played: {hands_played}")
+            winner_idx = -1
+
 
         return winner_idx, test_actions
 

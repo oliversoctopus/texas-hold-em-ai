@@ -54,11 +54,17 @@ class TexasHoldEmTraining:
         streets = ['preflop', 'flop', 'turn', 'river']
         for street_idx, street in enumerate(streets):
             if street == 'flop':
-                self.community_cards.extend(self.deck.draw(3))
+                # Draw 3 cards and filter out None values
+                flop_cards = self.deck.draw(3)
+                self.community_cards.extend([c for c in flop_cards if c is not None])
             elif street == 'turn':
-                self.community_cards.append(self.deck.draw())
+                card = self.deck.draw()
+                if card:
+                    self.community_cards.append(card)
             elif street == 'river':
-                self.community_cards.append(self.deck.draw())
+                card = self.deck.draw()
+                if card:
+                    self.community_cards.append(card)
             
             # Betting round
             street_experiences = self.betting_round_with_tracking(ai_models, street_idx)
@@ -335,12 +341,21 @@ class TexasHoldEmTraining:
         
         # Fill community cards if needed
         while len(self.community_cards) < 5:
-            self.community_cards.append(self.deck.draw())
+            card = self.deck.draw()
+            if card:
+                self.community_cards.append(card)
+            else:
+                break  # Deck is empty
         
         scores = []
         for player in active:
-            all_cards = player.hand + self.community_cards
-            score = evaluate_hand(all_cards)
+            # Filter out None cards (in case deck ran out)
+            all_cards = [c for c in player.hand + self.community_cards if c is not None]
+            if len(all_cards) < 5:
+                print(f"WARNING: Not enough cards for {player.name} (only {len(all_cards)} cards)")
+                score = 0
+            else:
+                score = evaluate_hand(all_cards)
             scores.append((player, score))
         
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -381,6 +396,17 @@ class TexasHoldEm:
     
     def play_hand(self, verbose=True):
         """Play a complete hand interactively"""
+        # Debug: Track total chips at start
+        initial_total_chips = sum(p.chips for p in self.players)
+        if initial_total_chips == 0:
+            print(f"CRITICAL WARNING: Starting hand with 0 total chips!")
+            print(f"  This should NEVER happen in poker - chips cannot disappear!")
+            print(f"  Player chips: {[p.chips for p in self.players]}")
+            import traceback
+            print("  Stack trace:")
+            traceback.print_stack()
+            return  # Don't continue with invalid game state
+
         self.deck.reset()
         self.community_cards = []
         self.pot = 0
@@ -388,7 +414,7 @@ class TexasHoldEm:
         self.action_history = []
         self.opponent_bets = []
         self.last_raise_amount = self.big_blind  # Initialize minimum raise
-        
+
         for player in self.players:
             player.reset_hand()
         
@@ -409,16 +435,25 @@ class TexasHoldEm:
         streets = ['preflop', 'flop', 'turn', 'river']
         for street_idx, street in enumerate(streets):
             if street == 'flop':
-                self.community_cards.extend(self.deck.draw(3))
+                # Draw 3 cards and filter out None values
+                flop_cards = self.deck.draw(3)
+                self.community_cards.extend([c for c in flop_cards if c is not None])
             elif street == 'turn':
-                self.community_cards.append(self.deck.draw())
+                card = self.deck.draw()
+                if card:
+                    self.community_cards.append(card)
             elif street == 'river':
-                self.community_cards.append(self.deck.draw())
+                card = self.deck.draw()
+                if card:
+                    self.community_cards.append(card)
             
             if self.verbose:
                 print(f"\n--- {street.capitalize()} ---")
                 if self.community_cards:
-                    print(f"Community cards: {self.community_cards}")
+                    # Filter out None values for display
+                    visible_cards = [c for c in self.community_cards if c is not None]
+                    if visible_cards:
+                        print(f"Community cards: {visible_cards}")
             
             if not self.betting_round(verbose=verbose, street_idx=street_idx):
                 break
@@ -429,7 +464,27 @@ class TexasHoldEm:
         # Showdown
         winners = self.determine_winners(verbose=verbose)
         self.distribute_pot(winners, verbose=verbose)
-        
+
+        # Debug: Check chip conservation
+        final_total_chips = sum(p.chips for p in self.players) + self.pot
+        if final_total_chips != initial_total_chips:
+            print(f"\nCHIP CONSERVATION ERROR!")
+            print(f"  Initial total: {initial_total_chips}")
+            print(f"  Final total: {final_total_chips}")
+            print(f"  Difference: {final_total_chips - initial_total_chips}")
+            print(f"  Pot remaining: {self.pot}")
+            print(f"  Player chips: {[p.chips for p in self.players]}")
+
+        # Check for all players having zero chips
+        if all(p.chips == 0 for p in self.players):
+            print(f"\nCRITICAL WARNING: All players have 0 chips after hand!")
+            print(f"  This should NEVER happen - chips cannot all disappear!")
+            print(f"  Initial total was: {initial_total_chips}")
+            print(f"  Pot remaining: {self.pot}")
+            import traceback
+            print("  Stack trace:")
+            traceback.print_stack()
+
         # Move dealer
         self.dealer_position = (self.dealer_position + 1) % len(self.players)
     
@@ -812,12 +867,21 @@ class TexasHoldEm:
         
         # Fill community cards
         while len(self.community_cards) < 5:
-            self.community_cards.append(self.deck.draw())
+            card = self.deck.draw()
+            if card:
+                self.community_cards.append(card)
+            else:
+                break  # Deck is empty
         
         scores = []
         for player in active:
-            all_cards = player.hand + self.community_cards
-            score = evaluate_hand(all_cards)
+            # Filter out None cards (in case deck ran out)
+            all_cards = [c for c in player.hand + self.community_cards if c is not None]
+            if len(all_cards) < 5:
+                print(f"WARNING: Not enough cards for {player.name} (only {len(all_cards)} cards)")
+                score = 0
+            else:
+                score = evaluate_hand(all_cards)
             scores.append((player, score))
         
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -834,14 +898,19 @@ class TexasHoldEm:
         """Distribute pot to winners"""
         if not winners:
             return
-        
+
         split = self.pot // len(winners)
         remainder = self.pot % len(winners)
-        
+
         if verbose:
             print(f"\n--- Pot Distribution ---")
+            print(f"Total pot: ${self.pot}")
+
         for i, winner in enumerate(winners):
             amount = split + (1 if i < remainder else 0)
             winner.chips += amount
             if verbose:
                 print(f"{winner.name} wins ${amount}")
+
+        # CRITICAL FIX: Reset pot to 0 after distribution
+        self.pot = 0

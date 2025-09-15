@@ -32,7 +32,19 @@ class Deck:
         random.shuffle(self.cards)
     
     def draw(self, n=1):
-        drawn = [self.cards.pop() for _ in range(min(n, len(self.cards)))]
+        drawn = []
+        for _ in range(n):
+            if self.cards:
+                drawn.append(self.cards.pop())
+            else:
+                # Deck is empty - this shouldn't happen in normal poker
+                print(f"WARNING: Deck ran out of cards! This should not happen in normal poker.")
+                print(f"  Cards already drawn: {52 - len(self.cards)}")
+                print(f"  Attempting to draw: {n - len(drawn)} more")
+                import traceback
+                print("  Stack trace:")
+                traceback.print_stack()
+                drawn.append(None)
         return drawn if n > 1 else drawn[0] if drawn else None
     
 def evaluate_hand(cards):

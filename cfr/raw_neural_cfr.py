@@ -359,7 +359,7 @@ class RawNeuralCFR:
                 avg_loss = np.mean(self.training_stats['loss'][-100:]) if self.training_stats['loss'] else 0
                 print(f"Iteration {iteration}/{self.iterations} | "
                       f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
-                      f"ε: {self.epsilon:.3f} | T: {self.temperature:.2f}")
+                      f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
 
         if verbose:
             print(f"\nTraining complete in {time.time() - start_time:.1f} seconds")
@@ -446,16 +446,36 @@ class RawNeuralCFR:
         final_stacks = game_state['stacks']
 
         # Calculate utility for each player (money won/lost)
-        utilities = [
-            final_stacks[0] - starting_chips[0],
-            final_stacks[1] - starting_chips[1]
+        # Normalize by big blind to keep values in reasonable range
+        BIG_BLIND = 20
+        final_utilities = [
+            (final_stacks[0] - starting_chips[0]) / BIG_BLIND,  # Convert to BB units
+            (final_stacks[1] - starting_chips[1]) / BIG_BLIND
         ]
 
-        # Add utilities to experiences
-        for exp in trajectory:
+
+        # Calculate returns for each action (credit assignment from that point forward)
+        # Later actions get full credit, earlier actions get discounted credit
+        discount = 0.95  # Slight discount for temporal difference
+
+        # Process trajectory in reverse to calculate returns
+        # Track the last seen return for each player
+        player_returns = [None, None]
+
+        for i in range(len(trajectory) - 1, -1, -1):
+            exp = trajectory[i]
             player = exp['player']
-            exp['utility'] = utilities[player]
-            exp['baseline'] = 0  # Will be updated with value network
+
+            if player_returns[player] is None:
+                # First time seeing this player (from the end), use final utility
+                exp['utility'] = final_utilities[player]
+                player_returns[player] = final_utilities[player]
+            else:
+                # Use discounted return from this player's future actions
+                exp['utility'] = player_returns[player] * discount
+                player_returns[player] = exp['utility']
+
+            exp['baseline'] = 0  # Will be replaced with actual value prediction
 
         return trajectory
 
@@ -479,13 +499,34 @@ class RawNeuralCFR:
                 action_probs = action_probs / action_probs.sum()
             else:
                 # If no legal actions (shouldn't happen), uniform over legal
-                action_probs = legal_actions / legal_actions.sum()
+                if legal_actions.sum() > 0:
+                    action_probs = legal_actions / legal_actions.sum()
+                else:
+                    # Fallback: force fold action
+                    print("WARNING: No legal actions available, forcing FOLD")
+                    print(f"  Game state details:")
+                    print(f"    Stage: {game_state.get('stage', 'unknown')}")
+                    print(f"    Current player: {game_state.get('current_player', 'unknown')}")
+                    print(f"    Active players: {game_state.get('active_players', 'unknown')}")
+                    print(f"    Current bets: {game_state.get('current_bets', 'unknown')}")
+                    print(f"    Pot: {game_state.get('pot', 'unknown')}")
+                    print(f"    Stacks: {game_state.get('stacks', 'unknown')}")
+                    print(f"    Legal actions array: {legal_actions}")
+                    print(f"    Action history: {game_state.get('action_history', [])}")
+                    action_probs = np.zeros(8)
+                    action_probs[0] = 1.0  # FOLD
 
             # Epsilon-greedy exploration
             if random.random() < self.epsilon:
                 # Random action from legal actions
                 legal_indices = np.where(legal_actions > 0)[0]
-                action = np.random.choice(legal_indices)
+                if len(legal_indices) > 0:
+                    action = np.random.choice(legal_indices)
+                else:
+                    print("ERROR: No legal actions for epsilon-greedy!")
+                    print(f"  Legal actions: {legal_actions}")
+                    print(f"  Forcing FOLD action")
+                    action = 0  # FOLD
             else:
                 # Sample from distribution
                 action = np.random.choice(len(action_probs), p=action_probs)
@@ -593,28 +634,31 @@ class RawNeuralCFR:
         current_bet = game_state['current_bets'][player]
         max_bet = max(game_state['current_bets'])
 
-        if stack <= 0:
-            return legal  # No actions if no chips
-
-        # Fold is always legal
+        # Fold is ALWAYS legal, even with no chips
         legal[CFRAction.FOLD.value] = 1
+
+        # If player has no chips, they can only fold or check (if no bet to match)
+        if stack <= 0:
+            if current_bet == max_bet:
+                legal[CFRAction.CHECK.value] = 1  # Can check if no bet to call
+            return legal
 
         # Check if no bet to call
         if current_bet == max_bet:
             legal[CFRAction.CHECK.value] = 1
 
-        # Call if there's a bet to call
+        # Call if there's a bet to call and we have chips
         if current_bet < max_bet and stack > 0:
             legal[CFRAction.CALL.value] = 1
 
-        # Betting actions if we have chips
+        # Betting actions if we have enough chips
         if stack > max_bet - current_bet:
             legal[CFRAction.BET_SMALL.value] = 1
             legal[CFRAction.BET_MEDIUM.value] = 1
             legal[CFRAction.BET_LARGE.value] = 1
             legal[CFRAction.BET_POT.value] = 1
 
-        # All-in is always legal if we have chips
+        # All-in is legal if we have chips
         if stack > 0:
             legal[CFRAction.ALL_IN.value] = 1
 
@@ -660,34 +704,47 @@ class RawNeuralCFR:
 
         total_loss = 0
 
+        # Utilities are already normalized to BB units (typically -50 to +50)
+        # No need for further normalization
+
         for experience in batch:
             game_state = experience['state']
             action = experience['action']
-            utility = experience['utility']
+            utility = experience['utility']  # Already in BB units
 
             # Forward pass
             strategy, value = self.network(game_state)
 
-            # Get baseline from value network
-            baseline = value.item()
+            # Calculate advantage using value network's prediction (detached to prevent manipulation)
+            with torch.no_grad():
+                # Use the current network's value prediction as baseline
+                baseline = value.item()
+                # Both utility and baseline are in BB units
+                advantage = utility - baseline
+                # Clip advantage for stability (in BB units)
+                advantage = np.clip(advantage, -10, 10)  # ±10 BB is a reasonable range
 
-            # Calculate advantage
-            advantage = utility - baseline
-
-            # Policy gradient loss
+            # Policy gradient loss (REINFORCE with baseline)
             log_probs = F.log_softmax(strategy, dim=0)
+            # Clamp log probabilities to prevent extreme values when prob is near 0
+            log_probs = torch.clamp(log_probs, min=-10)  # e^-10 ≈ 0.000045
             policy_loss = -log_probs[action] * advantage
 
-            # Value loss
-            value_loss = F.mse_loss(value, torch.FloatTensor([utility]))
-
+            # Value loss - train to predict actual returns accurately
+            # This is pure supervised learning - no advantage manipulation
+            # Utility is already normalized to BB units (-50 to +50 typical range)
+            value_target = torch.FloatTensor([utility])
+            value_loss = F.smooth_l1_loss(value, value_target)  # Huber loss for robustness
+            
             # Entropy regularization for exploration
             probs = F.softmax(strategy, dim=0)
             entropy = -(probs * log_probs).sum()
             entropy_bonus = -0.01 * entropy  # Negative because we want to maximize entropy
 
-            # Combined loss
-            loss = policy_loss + 0.5 * value_loss + entropy_bonus
+            # Combined loss with balanced weights
+            # Scale down to prevent large losses
+            loss = 0.1 * policy_loss + 0.5 * value_loss + entropy_bonus
+
 
             # Backward pass
             self.optimizer.zero_grad()
