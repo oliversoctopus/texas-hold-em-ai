@@ -1,12 +1,8 @@
 import random
-from core.game_constants import Action
+import os
 from dqn.poker_ai import PokerAI
 from core.game_engine import TexasHoldEm
-from dqn.training import hyperparameter_tuning, train_ai_advanced
 from evaluation.unified_evaluation import evaluate_dqn_full, evaluate_cfr_full, evaluate_deep_cfr_full
-from core.player import Player
-from evaluation.advanced_evaluation import AdvancedEvaluator, evaluate_all_models
-from utils.create_strategy_bots import create_all_strategy_bots, load_strategy_bots
 
 def main():
     """Main game loop"""
@@ -210,7 +206,6 @@ def main():
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
-            import os
             dirname = os.path.dirname(filename)
             if dirname and not os.path.exists(dirname):
                 os.makedirs(dirname)
@@ -274,7 +269,6 @@ def main():
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
-            import os
             dirname = os.path.dirname(filename)
             if dirname and not os.path.exists(dirname):
                 os.makedirs(dirname)
@@ -421,7 +415,6 @@ def main():
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
-            import os
             dirname = os.path.dirname(filename)
             if dirname and not os.path.exists(dirname):
                 os.makedirs(dirname)
