@@ -29,6 +29,15 @@ def detect_model_type(filename: str) -> Dict[str, Any]:
                 'data': data
             }
 
+        # Also check for 'type' field (used by RawNeuralCFR)
+        if isinstance(data, dict) and 'type' in data:
+            return {
+                'model_type': data['type'],
+                'model_version': data.get('version', '1.0'),
+                'has_flag': True,
+                'data': data
+            }
+
         # Fallback: try to infer from content structure (old format)
         if isinstance(data, dict):
             # Check for specific keys that indicate model type
@@ -143,6 +152,12 @@ def load_cfr_model_by_type(filename: str, verbose: bool = True):
     elif model_type == 'MultiPlayerCFR':
         from cfr.cfr_poker import CFRPokerAI
         model = CFRPokerAI()
+        model.load(filename)
+        return model, model_info
+
+    elif model_type == 'raw_neural_cfr':
+        from cfr.raw_neural_cfr import RawNeuralCFR
+        model = RawNeuralCFR()
         model.load(filename)
         return model, model_info
 
@@ -382,6 +397,51 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
 
         return RawNeuralCFRGameWrapper(model)
 
+    elif model_type == 'raw_neural_cfr':
+        # Same as RawNeuralCFR but lowercase (from saved models)
+        class RawNeuralCFRGameWrapper:
+            def __init__(self, cfr_ai):
+                self.cfr_ai = cfr_ai
+                self.epsilon = 0
+
+            def choose_action(self, state, valid_actions, **kwargs):
+                return self.cfr_ai.get_action(
+                    hole_cards=getattr(state, 'hole_cards', []),
+                    community_cards=getattr(state, 'community_cards', []),
+                    pot_size=getattr(state, 'pot_size', 0),
+                    to_call=getattr(state, 'to_call', 0),
+                    stack_size=getattr(state, 'stack_size', 1000),
+                    position=getattr(state, 'position', 0),
+                    num_players=getattr(state, 'num_players', 2),
+                    action_history=getattr(state, 'action_history', [])
+                )
+
+            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
+                # Raw Neural CFR determines its own bet sizing
+                pot_size = getattr(state, 'pot_size', pot)
+                return min(player_chips, int(pot_size * 0.75))  # Default to 75% pot
+
+            def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
+                                 player_bet, num_players, players_in_hand, position=0,
+                                 action_history=None, opponent_bets=None, hand_phase=0):
+                """Create state object for Raw Neural CFR"""
+                class CFRState:
+                    def __init__(self, hand, community_cards, pot, current_bet, player_chips,
+                                player_bet, num_players, action_history, position):
+                        self.hole_cards = hand
+                        self.community_cards = community_cards
+                        self.pot_size = pot
+                        self.to_call = current_bet - player_bet
+                        self.stack_size = player_chips
+                        self.num_players = num_players
+                        self.action_history = action_history or []
+                        self.position = position
+
+                return CFRState(hand, community_cards, pot, current_bet, player_chips,
+                              player_bet, num_players, action_history, position)
+
+        return RawNeuralCFRGameWrapper(model)
+
     elif model_type == 'StrategySelectorCFR':
         class StrategySelectorCFRGameWrapper:
             def __init__(self, cfr_ai):
@@ -534,6 +594,25 @@ def evaluate_model_by_type(model, model_info: Dict[str, Any], num_games: int = 1
         players = 2  # Default for multi-player
         return evaluate_cfr_ai(model, num_games=num_games, num_players=players,
                              use_random_opponents=True, verbose=verbose)
+
+    elif model_type == 'raw_neural_cfr':
+        # Raw Neural CFR uses a different evaluation method (neural network-based)
+        from evaluation.unified_evaluation import evaluate_cfr_full
+
+        # Use DQN benchmarks if requested, otherwise use random opponents
+        use_random = not use_strong_opponents
+
+        if verbose:
+            opponent_type = "random opponents" if use_random else "DQN benchmark models"
+            print(f"Evaluating Raw Neural CFR against {opponent_type}...")
+
+        return evaluate_cfr_full(
+            model,
+            num_games=num_games,
+            num_players=2,
+            use_random_opponents=use_random,
+            verbose=verbose
+        )
 
     else:
         raise ValueError(f"Cannot evaluate unknown model type: {model_type}")

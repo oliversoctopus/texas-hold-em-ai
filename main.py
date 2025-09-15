@@ -294,56 +294,108 @@ def main():
         print("Features: Deep neural networks, attention mechanisms, residual connections")
         print("-" * 60)
 
-        # Training configuration
-        print("\nSelect training configuration:")
-        print("1. Quick (500 iterations - ~20 minutes)")
-        print("2. Standard (2,000 iterations - ~1.5 hours)")
-        print("3. Professional (5,000 iterations - ~3-4 hours)")
-        print("4. Custom")
-
-        config_choice = input("Choose configuration (1-4): ")
-
-        if config_choice == '1':
-            iterations = 500
-            config_name = "Quick"
-        elif config_choice == '2':
-            iterations = 2000
-            config_name = "Standard"
-        elif config_choice == '3':
-            iterations = 5000
-            config_name = "Professional"
-        else:
-            iterations = int(input("Number of iterations: ") or "25000")
-            config_name = "Custom"
-
-        # Advanced settings
-        learning_rate = 0.001
-        batch_size = 32
-
-        advanced = input("\nConfigure advanced settings? (y/n): ")
-        if advanced.lower() == 'y':
-            lr = input(f"Learning rate (default: {learning_rate}): ")
-            if lr:
-                learning_rate = float(lr)
-            bs = input(f"Batch size (default: {batch_size}): ")
-            if bs:
-                batch_size = int(bs)
-
-        print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
-        print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
-        print("This version learns strategies directly from raw game data.")
-        print("Starting training...\n")
+        # Ask if user wants to resume or start fresh
+        print("\nTraining Options:")
+        print("1. Start new training")
+        print("2. Resume from existing model")
+        resume_choice = input("Choose option (1-2, default: 1): ") or "1"
 
         from cfr.raw_neural_cfr import RawNeuralCFR
 
-        # Create and train
-        cfr_ai = RawNeuralCFR(
-            iterations=iterations,
-            learning_rate=learning_rate,
-            batch_size=batch_size
-        )
+        if resume_choice == '2':
+            # Resume from existing model
+            model_file = input("Enter model file to resume from (e.g., models/cfr/raw_neural_quick.pkl): ")
+            if not os.path.exists(model_file):
+                print(f"Model file not found: {model_file}")
+                print("Starting fresh training instead...")
+                resume_choice = '1'
+            else:
+                # Load existing model
+                print(f"\nLoading model from {model_file}...")
+                cfr_ai = RawNeuralCFR()
+                cfr_ai.load(model_file)
+                print(f"Model loaded. Previous iterations: {cfr_ai.iteration_count}")
 
-        cfr_ai.train(verbose=True)
+                # Ask for additional iterations
+                print("\nHow many additional iterations to train?")
+                print("1. Quick (500 more iterations)")
+                print("2. Standard (2,000 more iterations)")
+                print("3. Extended (5,000 more iterations)")
+                print("4. Custom")
+
+                add_choice = input("Choose option (1-4): ")
+
+                if add_choice == '1':
+                    additional_iterations = 500
+                    config_name = "Resume_Quick"
+                elif add_choice == '2':
+                    additional_iterations = 2000
+                    config_name = "Resume_Standard"
+                elif add_choice == '3':
+                    additional_iterations = 5000
+                    config_name = "Resume_Extended"
+                else:
+                    additional_iterations = int(input("Number of additional iterations: ") or "1000")
+                    config_name = "Resume_Custom"
+
+                # Resume training
+                cfr_ai.resume_training(additional_iterations, verbose=True)
+
+                # Jump to evaluation/saving
+                resume_completed = True
+
+        if resume_choice == '1':
+            # Original training flow
+            resume_completed = False
+
+            # Training configuration
+            print("\nSelect training configuration:")
+            print("1. Quick (500 iterations - ~20 minutes)")
+            print("2. Standard (2,000 iterations - ~1.5 hours)")
+            print("3. Professional (5,000 iterations - ~3-4 hours)")
+            print("4. Custom")
+
+            config_choice = input("Choose configuration (1-4): ")
+
+            if config_choice == '1':
+                iterations = 500
+                config_name = "Quick"
+            elif config_choice == '2':
+                iterations = 2000
+                config_name = "Standard"
+            elif config_choice == '3':
+                iterations = 5000
+                config_name = "Professional"
+            else:
+                iterations = int(input("Number of iterations: ") or "25000")
+                config_name = "Custom"
+
+            # Advanced settings
+            learning_rate = 0.001
+            batch_size = 32
+
+            advanced = input("\nConfigure advanced settings? (y/n): ")
+            if advanced.lower() == 'y':
+                lr = input(f"Learning rate (default: {learning_rate}): ")
+                if lr:
+                    learning_rate = float(lr)
+                bs = input(f"Batch size (default: {batch_size}): ")
+                if bs:
+                    batch_size = int(bs)
+
+            print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
+            print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
+            print("This version learns strategies directly from raw game data.")
+            print("Starting training...\n")
+
+            # Create and train
+            cfr_ai = RawNeuralCFR(
+                iterations=iterations,
+                learning_rate=learning_rate,
+                batch_size=batch_size
+            )
+
+            cfr_ai.train(verbose=True)
 
         # Evaluate the model
         eval_choice = input("\nEvaluate Raw Neural CFR? (y/n): ")

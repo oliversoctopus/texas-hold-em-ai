@@ -802,12 +802,21 @@ class RawNeuralCFR:
         checkpoint = {
             'type': 'raw_neural_cfr',  # Add type flag for model identification
             'network_state': self.network.state_dict(),
+            'target_network_state': self.target_network.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'regret_sum': dict(self.regret_sum),
             'strategy_sum': dict(self.strategy_sum),
             'training_stats': self.training_stats,
             'iterations': self.iterations,
-            'iteration_count': self.iteration_count
+            'iteration_count': self.iteration_count,
+            'epsilon': self.epsilon,
+            'temperature': self.temperature,
+            'initial_epsilon': self.initial_epsilon,
+            'final_epsilon': self.final_epsilon,
+            'initial_temperature': self.initial_temperature,
+            'final_temperature': self.final_temperature,
+            # Save last 1000 experiences for continuity
+            'recent_experiences': list(self.experience_buffer)[-1000:] if self.experience_buffer else []
         }
         with open(filename, 'wb') as f:
             pickle.dump(checkpoint, f)
@@ -823,8 +832,91 @@ class RawNeuralCFR:
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
+
+        # Load target network if available
+        if 'target_network_state' in checkpoint:
+            self.target_network.load_state_dict(checkpoint['target_network_state'])
+        else:
+            # If no target network saved, copy from main network
+            self.target_network.load_state_dict(self.network.state_dict())
+
         self.regret_sum = defaultdict(lambda: np.zeros(8), checkpoint['regret_sum'])
         self.strategy_sum = defaultdict(lambda: np.zeros(8), checkpoint['strategy_sum'])
         self.training_stats = checkpoint['training_stats']
         self.iterations = checkpoint['iterations']
         self.iteration_count = checkpoint.get('iteration_count', 0)
+
+        # Load exploration parameters if available
+        self.epsilon = checkpoint.get('epsilon', self.epsilon)
+        self.temperature = checkpoint.get('temperature', self.temperature)
+        self.initial_epsilon = checkpoint.get('initial_epsilon', self.initial_epsilon)
+        self.final_epsilon = checkpoint.get('final_epsilon', self.final_epsilon)
+        self.initial_temperature = checkpoint.get('initial_temperature', self.initial_temperature)
+        self.final_temperature = checkpoint.get('final_temperature', self.final_temperature)
+
+        # Load recent experiences if available
+        if 'recent_experiences' in checkpoint and checkpoint['recent_experiences']:
+            for exp in checkpoint['recent_experiences']:
+                self.experience_buffer.append(exp)
+
+    def resume_training(self, additional_iterations: int, verbose: bool = True):
+        """Resume training from a loaded model
+
+        Args:
+            additional_iterations: Number of additional iterations to train
+            verbose: Whether to print progress
+        """
+        if verbose:
+            print(f"Resuming Raw Neural CFR Training")
+            print(f"Previous iterations: {self.iteration_count}")
+            print(f"Additional iterations: {additional_iterations}")
+            print(f"Total iterations: {self.iteration_count + additional_iterations}")
+            print(f"Current epsilon: {self.epsilon:.3f}")
+            print(f"Current temperature: {self.temperature:.3f}")
+            print("=" * 60)
+
+        # Update total iterations for proper exploration decay
+        old_total = self.iterations
+        self.iterations = self.iteration_count + additional_iterations
+        start_iteration = self.iteration_count
+        start_time = time.time()
+
+        for iteration in range(start_iteration, self.iterations):
+            self.iteration_count = iteration
+
+            # Update exploration parameters based on total progress
+            progress = iteration / self.iterations
+            self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
+            self.temperature = self.initial_temperature - (self.initial_temperature - self.final_temperature) * progress
+
+            # Sample game trajectory with exploration
+            trajectory = self._sample_game_trajectory()
+
+            # Calculate advantages and update regrets
+            self._update_regrets(trajectory)
+
+            # Store experiences
+            for experience in trajectory:
+                self.experience_buffer.append(experience)
+
+            # Train on batch when buffer is large enough
+            if len(self.experience_buffer) >= self.batch_size * 2:
+                loss = self._train_on_batch()
+                self.training_stats['loss'].append(loss)
+
+            # Update target network periodically
+            if iteration % self.update_target_every == 0:
+                self.target_network.load_state_dict(self.network.state_dict())
+
+            # Progress update
+            if verbose and (iteration - start_iteration) % max(1, additional_iterations // 20) == 0:
+                elapsed = time.time() - start_time
+                avg_loss = np.mean(self.training_stats['loss'][-100:]) if self.training_stats['loss'] else 0
+                print(f"Iteration {iteration}/{self.iterations} | "
+                      f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
+                      f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
+
+        if verbose:
+            total_time = time.time() - start_time
+            print(f"\nResumed training complete in {total_time:.1f} seconds")
+            print(f"Total iterations completed: {self.iteration_count}")
