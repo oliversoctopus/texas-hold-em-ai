@@ -736,14 +736,14 @@ class RawNeuralCFR:
             value_target = torch.FloatTensor([utility])
             value_loss = F.smooth_l1_loss(value, value_target)  # Huber loss for robustness
             
-            # Entropy regularization for exploration
-            probs = F.softmax(strategy, dim=0)
-            entropy = -(probs * log_probs).sum()
-            entropy_bonus = -0.01 * entropy  # Negative because we want to maximize entropy
+            # DEPRECATED: Entropy regularization for exploration. Just produces way too aggressive play (50%+ raise).
+            #probs = F.softmax(strategy, dim=0)
+            #entropy = -(probs * log_probs).sum()
+            #entropy_bonus = -0.01 * entropy  # Negative because we want to maximize entropy
 
             # Combined loss with balanced weights
             # Scale down to prevent large losses
-            loss = 0.1 * policy_loss + 0.5 * value_loss + entropy_bonus
+            loss = 0.1 * policy_loss + 0.5 * value_loss # + entropy_bonus
 
 
             # Backward pass
@@ -800,6 +800,7 @@ class RawNeuralCFR:
     def save(self, filename: str):
         """Save the model"""
         checkpoint = {
+            'type': 'raw_neural_cfr',  # Add type flag for model identification
             'network_state': self.network.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'regret_sum': dict(self.regret_sum),
@@ -815,6 +816,10 @@ class RawNeuralCFR:
         """Load a saved model"""
         with open(filename, 'rb') as f:
             checkpoint = pickle.load(f)
+
+        # Verify model type if present
+        if 'type' in checkpoint and checkpoint['type'] != 'raw_neural_cfr':
+            print(f"Warning: Loading model with type '{checkpoint['type']}' as Raw Neural CFR")
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
