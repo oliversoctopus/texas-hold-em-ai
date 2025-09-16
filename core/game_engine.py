@@ -282,6 +282,13 @@ class TexasHoldEmTraining:
                             self.position = game.players.index(player)
                             self.num_players = game.num_players
                             self.action_history = game.action_history[-10:]
+
+                            # Get opponent stacks (for 2-player, just the other player)
+                            opponents = [p for p in game.players if p != player and not p.folded]
+                            if opponents:
+                                self.opponent_stack = opponents[0].chips
+                            else:
+                                self.opponent_stack = 0  # No active opponents
                     
                     state = DummyState(player, self)
                 else:
@@ -563,6 +570,13 @@ class TexasHoldEm:
                                 self.position = game.players.index(player)
                                 self.num_players = game.num_players
                                 self.action_history = game.action_history[-10:]
+
+                                # Get opponent stacks (for 2-player, just the other player)
+                                opponents = [p for p in game.players if p != player and not p.folded]
+                                if opponents:
+                                    self.opponent_stack = opponents[0].chips
+                                else:
+                                    self.opponent_stack = 0  # No active opponents
                         
                         state = DummyState(player, self)
                     else:
@@ -719,6 +733,13 @@ class TexasHoldEm:
                                 self.position = game.players.index(player)
                                 self.num_players = game.num_players
                                 self.action_history = game.action_history[-10:]
+
+                                # Get opponent stacks (for 2-player, just the other player)
+                                opponents = [p for p in game.players if p != player and not p.folded]
+                                if opponents:
+                                    self.opponent_stack = opponents[0].chips
+                                else:
+                                    self.opponent_stack = 0  # No active opponents
                         
                         state = DummyState(player, self)
                     else:

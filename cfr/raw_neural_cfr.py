@@ -219,34 +219,39 @@ class RawNeuralCFRNetwork(nn.Module):
         pot = game_state.get('pot', 0)
         features.append(pot / 2000.0)  # Normalize by typical max pot
 
-        # Stack sizes
+        # Stack sizes (both our stack and opponent's)
         stacks = game_state.get('stacks', [1000, 1000])
         for stack in stacks[:2]:
             features.append(stack / 1000.0)
 
-        # Current player
-        current_player = game_state.get('current_player', 0)
-        features.append(float(current_player))
+        # CRITICAL: Amount to call (normalized)
+        to_call = game_state.get('to_call', 0)
+        features.append(to_call / 1000.0)  # Normalized by starting stack
 
-        # Button position
-        button = game_state.get('button', 0)
-        features.append(float(button))
+        # Pot odds (call_amount / (pot + call_amount))
+        if to_call > 0 and pot > 0:
+            pot_odds = to_call / (pot + to_call)
+        else:
+            pot_odds = 0.0
+        features.append(pot_odds)
 
-        # Player positions relative to button
-        num_players = 2
-        for i in range(num_players):
-            position = (i - button) % num_players
-            features.append(position / float(num_players - 1))
-
-        # Current bets
+        # Current bets (shows betting in current round)
         bets = game_state.get('current_bets', [0, 0])
         for bet in bets[:2]:
             features.append(bet / 1000.0)
 
-        # Active status
-        active = game_state.get('active_players', [True, True])
-        for is_active in active[:2]:
-            features.append(float(is_active))
+        # Position information (important for strategy)
+        button = game_state.get('button', 0)
+        position = game_state.get('position', 0)
+        num_players = game_state.get('num_players', 2)
+
+        # Are we in position? (acting after opponent)
+        in_position = float((position - button) % num_players > (num_players // 2))
+        features.append(in_position)
+
+        # Relative position (0 = button, normalized)
+        relative_position = (position - button) % num_players
+        features.append(relative_position / max(1, num_players - 1))
 
         # Game stage (one-hot)
         stage = game_state.get('stage', 0)  # 0=preflop, 1=flop, 2=turn, 3=river
@@ -255,12 +260,28 @@ class RawNeuralCFRNetwork(nn.Module):
             stage_onehot[stage] = 1.0
         features.extend(stage_onehot)
 
-        # Legal actions mask
-        legal_actions = game_state.get('legal_actions', [1] * 8)
-        for is_legal in legal_actions[:8]:
-            features.append(float(is_legal))
+        # Stack to pot ratio (SPR) - important for decision making
+        if pot > 0:
+            spr = stacks[0] / pot if stacks[0] > 0 else 0
+        else:
+            spr = 10.0  # High SPR when pot is 0
+        features.append(min(spr / 10.0, 1.0))  # Cap at 1.0
 
-        # Pad to fixed size
+        # Can afford to call? (binary)
+        can_call = 1.0 if stacks[0] >= to_call else 0.0
+        features.append(can_call)
+
+        # Legal actions mask (first 4 important ones)
+        legal_actions = game_state.get('legal_actions', [1] * 8)
+        # Include FOLD, CHECK, CALL, and whether any RAISE is legal
+        features.append(float(legal_actions[CFRAction.FOLD.value]))
+        features.append(float(legal_actions[CFRAction.CHECK.value]))
+        features.append(float(legal_actions[CFRAction.CALL.value]))
+        # Any raise action legal?
+        can_raise = any(legal_actions[i] for i in [3, 4, 5, 6])
+        features.append(float(can_raise))
+
+        # Pad to fixed size (still 20)
         while len(features) < 20:
             features.append(0.0)
 
@@ -763,19 +784,57 @@ class RawNeuralCFR:
         # Get valid actions from kwargs (if provided)
         valid_actions = kwargs.get('valid_actions', None)
 
+        # Get betting information
+        to_call = kwargs.get('to_call', 0)
+        pot_size = kwargs.get('pot_size', 0)
+        stack_size = kwargs.get('stack_size', 1000)
+        opponent_stack = kwargs.get('opponent_stack', 1000)  # Get actual opponent stack
+        position = kwargs.get('position', 0)
+        num_players = kwargs.get('num_players', 2)
+
+        # Calculate current bets based on pot and to_call
+        # If there's an amount to call, someone has bet
+        my_current_bet = 0  # Assume we haven't bet yet this round
+        opponent_current_bet = to_call  # Opponent's bet is what we need to call
+
+        # Convert valid_actions to legal actions mask for the 8 CFR actions
+        legal_actions_mask = [0] * 8
+        if valid_actions:
+            for action in valid_actions:
+                if action == Action.FOLD:
+                    legal_actions_mask[CFRAction.FOLD.value] = 1
+                elif action == Action.CHECK:
+                    legal_actions_mask[CFRAction.CHECK.value] = 1
+                elif action == Action.CALL:
+                    legal_actions_mask[CFRAction.CALL.value] = 1
+                elif action == Action.RAISE:
+                    # Multiple bet sizes are legal if RAISE is allowed
+                    legal_actions_mask[CFRAction.BET_SMALL.value] = 1
+                    legal_actions_mask[CFRAction.BET_MEDIUM.value] = 1
+                    legal_actions_mask[CFRAction.BET_LARGE.value] = 1
+                    legal_actions_mask[CFRAction.BET_POT.value] = 1
+                elif action == Action.ALL_IN:
+                    legal_actions_mask[CFRAction.ALL_IN.value] = 1
+        else:
+            # If no valid actions specified, assume all are legal (backward compatibility)
+            legal_actions_mask = [1] * 8
+
         # Create game state from kwargs
         game_state = {
             'hole_cards': kwargs.get('hole_cards', []),
             'community_cards': kwargs.get('community_cards', []),
-            'pot': kwargs.get('pot_size', 0),
-            'stacks': [kwargs.get('stack_size', 1000), 1000],  # Simplified
+            'pot': pot_size,
+            'stacks': [stack_size, opponent_stack],  # Use actual opponent stack
             'current_player': 0,
-            'button': kwargs.get('position', 0),
-            'current_bets': [0, 0],
+            'button': position % num_players,  # Button position
+            'current_bets': [my_current_bet, opponent_current_bet],
             'active_players': [True, True],
             'stage': len(kwargs.get('community_cards', [])) // 2,
-            'action_history': [],
-            'legal_actions': [1] * 8
+            'action_history': kwargs.get('action_history', []),
+            'legal_actions': legal_actions_mask,  # Use actual legal actions
+            'to_call': to_call,  # Add this for feature extraction
+            'position': position,  # Add raw position
+            'num_players': num_players  # Add number of players
         }
 
         # Get state key

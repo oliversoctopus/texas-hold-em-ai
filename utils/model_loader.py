@@ -360,6 +360,14 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                 self.epsilon = 0
 
             def choose_action(self, state, valid_actions, **kwargs):
+                # Try to get opponent stack from state or kwargs
+                if hasattr(state, 'opponent_stack'):
+                    # DummyState from game engine now includes this
+                    opponent_stack = state.opponent_stack
+                else:
+                    # Fallback to kwargs or default
+                    opponent_stack = kwargs.get('opponent_stack', 1000)
+
                 return self.cfr_ai.get_action(
                     hole_cards=getattr(state, 'hole_cards', []),
                     community_cards=getattr(state, 'community_cards', []),
@@ -369,6 +377,7 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                     position=getattr(state, 'position', 0),
                     num_players=getattr(state, 'num_players', 2),
                     action_history=getattr(state, 'action_history', []),
+                    opponent_stack=opponent_stack,
                     valid_actions=valid_actions  # Pass valid actions to the model
                 )
 
@@ -406,6 +415,14 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                 self.epsilon = 0
 
             def choose_action(self, state, valid_actions, **kwargs):
+                # Try to get opponent stack from state or kwargs
+                if hasattr(state, 'opponent_stack'):
+                    # DummyState from game engine now includes this
+                    opponent_stack = state.opponent_stack
+                else:
+                    # Fallback to kwargs or default
+                    opponent_stack = kwargs.get('opponent_stack', 1000)
+
                 return self.cfr_ai.get_action(
                     hole_cards=getattr(state, 'hole_cards', []),
                     community_cards=getattr(state, 'community_cards', []),
@@ -415,6 +432,7 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                     position=getattr(state, 'position', 0),
                     num_players=getattr(state, 'num_players', 2),
                     action_history=getattr(state, 'action_history', []),
+                    opponent_stack=opponent_stack,
                     valid_actions=valid_actions  # Pass valid actions to the model
                 )
 
