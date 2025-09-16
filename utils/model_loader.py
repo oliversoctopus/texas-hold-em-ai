@@ -368,7 +368,8 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                     stack_size=getattr(state, 'stack_size', 1000),
                     position=getattr(state, 'position', 0),
                     num_players=getattr(state, 'num_players', 2),
-                    action_history=getattr(state, 'action_history', [])
+                    action_history=getattr(state, 'action_history', []),
+                    valid_actions=valid_actions  # Pass valid actions to the model
                 )
 
             def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
@@ -413,7 +414,8 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
                     stack_size=getattr(state, 'stack_size', 1000),
                     position=getattr(state, 'position', 0),
                     num_players=getattr(state, 'num_players', 2),
-                    action_history=getattr(state, 'action_history', [])
+                    action_history=getattr(state, 'action_history', []),
+                    valid_actions=valid_actions  # Pass valid actions to the model
                 )
 
             def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):

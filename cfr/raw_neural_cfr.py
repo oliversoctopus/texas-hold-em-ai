@@ -758,6 +758,9 @@ class RawNeuralCFR:
 
     def get_action(self, **kwargs) -> Action:
         """Get action for gameplay (uses average strategy)"""
+        # Get valid actions from kwargs (if provided)
+        valid_actions = kwargs.get('valid_actions', None)
+
         # Create game state from kwargs
         game_state = {
             'hole_cards': kwargs.get('hole_cards', []),
@@ -776,26 +779,91 @@ class RawNeuralCFR:
         # Get state key
         state_key = self._get_state_key(game_state)
 
+        # Create a mapping of valid action indices
+        # Note: RAISE maps to multiple bet sizes internally
+        action_to_idx = {
+            Action.FOLD: CFRAction.FOLD.value,
+            Action.CHECK: CFRAction.CHECK.value,
+            Action.CALL: CFRAction.CALL.value,
+            Action.RAISE: [CFRAction.BET_SMALL.value, CFRAction.BET_MEDIUM.value,
+                          CFRAction.BET_LARGE.value, CFRAction.BET_POT.value],
+            Action.ALL_IN: CFRAction.ALL_IN.value
+        }
+
+        # If valid actions are provided, filter the strategy
+        if valid_actions:
+            valid_indices = []
+            for act in valid_actions:
+                if act in action_to_idx:
+                    idx = action_to_idx[act]
+                    if isinstance(idx, list):
+                        valid_indices.extend(idx)  # Add all bet sizes for RAISE
+                    else:
+                        valid_indices.append(idx)
+        else:
+            valid_indices = list(range(8))  # All actions if not specified
+
         # Use average strategy if available
         if state_key in self.strategy_sum and self.strategy_sum[state_key].sum() > 0:
             strategy = self.strategy_sum[state_key] / self.strategy_sum[state_key].sum()
-            action_idx = np.random.choice(len(strategy), p=strategy)
+
+            # Filter strategy to only valid actions
+            if valid_actions:
+                masked_strategy = np.zeros(len(strategy))
+                for idx in valid_indices:
+                    if 0 <= idx < len(strategy):
+                        masked_strategy[idx] = strategy[idx]
+                # Renormalize
+                if masked_strategy.sum() > 0:
+                    masked_strategy = masked_strategy / masked_strategy.sum()
+                else:
+                    # Fallback: uniform over valid actions
+                    for idx in valid_indices:
+                        if 0 <= idx < len(masked_strategy):
+                            masked_strategy[idx] = 1.0 / len(valid_indices)
+                action_idx = np.random.choice(len(masked_strategy), p=masked_strategy)
+            else:
+                action_idx = np.random.choice(len(strategy), p=strategy)
         else:
             # Fall back to network prediction
             with torch.no_grad():
                 strategy, _ = self.network(game_state)
                 action_probs = F.softmax(strategy, dim=0)
-                action_idx = torch.multinomial(action_probs, 1).item()
 
-        # Convert to game action
+                # Filter to valid actions
+                if valid_actions and valid_indices:
+                    masked_probs = torch.zeros_like(action_probs)
+                    for idx in valid_indices:
+                        if 0 <= idx < len(action_probs):
+                            masked_probs[idx] = action_probs[idx]
+                    # Renormalize
+                    if masked_probs.sum() > 0:
+                        masked_probs = masked_probs / masked_probs.sum()
+                    else:
+                        # Fallback: uniform over valid actions
+                        for idx in valid_indices:
+                            if 0 <= idx < len(masked_probs):
+                                masked_probs[idx] = 1.0 / len(valid_indices)
+                    action_idx = torch.multinomial(masked_probs, 1).item()
+                else:
+                    action_idx = torch.multinomial(action_probs, 1).item()
+
+        # Convert to game action, ensuring it's valid
         if action_idx == CFRAction.FOLD.value:
-            return Action.FOLD
+            selected_action = Action.FOLD
         elif action_idx == CFRAction.CHECK.value:
-            return Action.CHECK
+            selected_action = Action.CHECK
         elif action_idx == CFRAction.CALL.value:
-            return Action.CALL
+            selected_action = Action.CALL
         else:
-            return Action.RAISE
+            selected_action = Action.RAISE
+
+        # Final validation: ensure selected action is in valid_actions
+        if valid_actions and selected_action not in valid_actions:
+            # Default to first valid action
+            return valid_actions[0] if valid_actions else Action.FOLD
+
+        return selected_action
 
     def save(self, filename: str):
         """Save the model"""

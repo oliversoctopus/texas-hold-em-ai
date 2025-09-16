@@ -241,6 +241,12 @@ class TexasHoldEmTraining:
         if action == Action.FOLD:
             player.folded = True
         elif action == Action.CHECK:
+            # Validate that checking is actually allowed
+            call_amount = self.current_bet - player.current_bet
+            if call_amount > 0:
+                # Invalid check - convert to fold
+                player.folded = True
+                return  # Exit early since we converted to fold
             pass
         elif action == Action.CALL:
             amount = player.bet(self.current_bet - player.current_bet)
@@ -659,6 +665,15 @@ class TexasHoldEm:
             if self.verbose:
                 print(f"{player.name} folds")
         elif action == Action.CHECK:
+            # Validate that checking is actually allowed
+            call_amount = self.current_bet - player.current_bet
+            if call_amount > 0:
+                # Invalid check - player must call, raise, or fold when there's a bet
+                # Convert invalid check to fold
+                player.folded = True
+                if verbose:
+                    print(f"WARNING: {player.name} attempted invalid check with ${call_amount} to call - folding instead")
+                return  # Exit early since we converted to fold
             if verbose:
                 print(f"{player.name} checks")
         elif action == Action.CALL:
