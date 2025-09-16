@@ -273,10 +273,12 @@ class RawNeuralCFR:
     def __init__(self, iterations: int = 50000, learning_rate: float = 0.001,
                  batch_size: int = 32, buffer_size: int = 100000,
                  initial_epsilon: float = 0.3, final_epsilon: float = 0.05,
-                 initial_temperature: float = 1.0, final_temperature: float = 0.1):
+                 initial_temperature: float = 1.0, final_temperature: float = 0.1,
+                 hidden_dim: int = 512):
         self.iterations = iterations
         self.learning_rate = learning_rate
         self.batch_size = batch_size
+        self.hidden_dim = hidden_dim
 
         # Exploration parameters
         self.initial_epsilon = initial_epsilon
@@ -288,12 +290,12 @@ class RawNeuralCFR:
         self.final_temperature = final_temperature
         self.temperature = initial_temperature
 
-        # Neural network
-        self.network = RawNeuralCFRNetwork()
+        # Neural network with configurable hidden dimension
+        self.network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
 
         # Target network for stability
-        self.target_network = RawNeuralCFRNetwork()
+        self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.target_network.load_state_dict(self.network.state_dict())
         self.update_target_every = 2000
 
@@ -883,6 +885,7 @@ class RawNeuralCFR:
             'final_epsilon': self.final_epsilon,
             'initial_temperature': self.initial_temperature,
             'final_temperature': self.final_temperature,
+            'hidden_dim': self.hidden_dim,  # Save the hidden dimension
             # Save last 1000 experiences for continuity
             'recent_experiences': list(self.experience_buffer)[-1000:] if self.experience_buffer else []
         }
@@ -897,6 +900,15 @@ class RawNeuralCFR:
         # Verify model type if present
         if 'type' in checkpoint and checkpoint['type'] != 'raw_neural_cfr':
             print(f"Warning: Loading model with type '{checkpoint['type']}' as Raw Neural CFR")
+
+        # Check if the model has a different hidden dimension
+        if 'hidden_dim' in checkpoint and checkpoint['hidden_dim'] != self.hidden_dim:
+            print(f"Note: Model was trained with hidden_dim={checkpoint['hidden_dim']}, but current is {self.hidden_dim}")
+            # Recreate networks with the correct hidden dimension
+            self.hidden_dim = checkpoint['hidden_dim']
+            self.network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
+            self.target_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
+            self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])

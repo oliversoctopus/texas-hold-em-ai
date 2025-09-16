@@ -364,6 +364,24 @@ def main():
                 iterations = int(input("Number of iterations: ") or "25000")
                 config_name = "Custom"
 
+            # Model size selection
+            print("\nSelect model size:")
+            print("1. Small (256 hidden units - faster training, less memory)")
+            print("2. Standard (512 hidden units - default)")
+            print("3. Custom")
+
+            size_choice = input("Choose model size (1-3, default: 2): ") or "2"
+
+            if size_choice == '1':
+                hidden_dim = 256
+                size_name = "Small"
+            elif size_choice == '2':
+                hidden_dim = 512
+                size_name = "Standard"
+            else:
+                hidden_dim = int(input("Hidden dimension size (128-1024): ") or "512")
+                size_name = f"Custom-{hidden_dim}"
+
             # Advanced settings
             learning_rate = 0.001
             batch_size = 32
@@ -378,6 +396,7 @@ def main():
                     batch_size = int(bs)
 
             print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
+            print(f"Model: {size_name} ({hidden_dim} hidden units)")
             print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
             print("This version learns strategies directly from raw game data.")
             print("Starting training...\n")
@@ -386,7 +405,8 @@ def main():
             cfr_ai = RawNeuralCFR(
                 iterations=iterations,
                 learning_rate=learning_rate,
-                batch_size=batch_size
+                batch_size=batch_size,
+                hidden_dim=hidden_dim
             )
 
             cfr_ai.train(verbose=True)
@@ -411,7 +431,11 @@ def main():
         # Save model
         save_choice = input("\nSave trained model? (y/n): ")
         if save_choice.lower() == 'y':
-            model_name = f"raw_neural_{config_name.lower()}.pkl"
+            # Include model size in filename if not standard
+            if 'hidden_dim' in locals() and hidden_dim != 512:
+                model_name = f"raw_neural_{config_name.lower()}_{hidden_dim}d.pkl"
+            else:
+                model_name = f"raw_neural_{config_name.lower()}.pkl"
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
