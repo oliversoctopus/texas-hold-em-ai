@@ -318,7 +318,7 @@ class RawNeuralCFR:
         # Target network for stability
         self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.target_network.load_state_dict(self.network.state_dict())
-        self.update_target_every = 2000
+        self.update_target_every = 50  # Update more frequently for faster opponent adaptation
 
         # Experience replay buffer
         self.experience_buffer = deque(maxlen=buffer_size)
