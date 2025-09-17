@@ -295,11 +295,12 @@ class RawNeuralCFR:
                  batch_size: int = 32, buffer_size: int = 100000,
                  initial_epsilon: float = 0.3, final_epsilon: float = 0.05,
                  initial_temperature: float = 1.0, final_temperature: float = 0.1,
-                 hidden_dim: int = 512):
+                 hidden_dim: int = 512, use_improved_selfplay: bool = False):
         self.iterations = iterations
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.hidden_dim = hidden_dim
+        self.use_improved_selfplay = use_improved_selfplay
 
         # Exploration parameters
         self.initial_epsilon = initial_epsilon
@@ -315,10 +316,18 @@ class RawNeuralCFR:
         self.network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
 
-        # Target network for stability
-        self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
-        self.target_network.load_state_dict(self.network.state_dict())
-        self.update_target_every = 50  # Update more frequently for faster opponent adaptation
+        if use_improved_selfplay:
+            # For improved self-play, create a second network as opponent
+            self.opponent_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
+            self.opponent_optimizer = optim.Adam(self.opponent_network.parameters(), lr=learning_rate)
+            # No target network needed in improved self-play
+            self.target_network = None
+            self.update_target_every = None
+        else:
+            # Normal self-play: use target network
+            self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
+            self.target_network.load_state_dict(self.network.state_dict())
+            self.update_target_every = 500  # Back to higher value for normal mode
 
         # Experience replay buffer
         self.experience_buffer = deque(maxlen=buffer_size)
@@ -340,11 +349,15 @@ class RawNeuralCFR:
 
     def train(self, verbose: bool = True):
         """Train the Raw Neural CFR"""
+        if self.use_improved_selfplay:
+            return self.train_improved_selfplay(verbose)
+
         if verbose:
-            print("Starting Raw Neural CFR Training")
+            print("Starting Raw Neural CFR Training (Normal Self-Play)")
             print(f"Iterations: {self.iterations}")
             print(f"Initial epsilon: {self.initial_epsilon} -> {self.final_epsilon}")
             print(f"Initial temperature: {self.initial_temperature} -> {self.final_temperature}")
+            print(f"Target network update frequency: {self.update_target_every}")
             print("=" * 60)
 
         start_time = time.time()
@@ -392,6 +405,137 @@ class RawNeuralCFR:
 
         if verbose:
             print(f"\nTraining complete in {time.time() - start_time:.1f} seconds")
+
+    def train_improved_selfplay(self, verbose: bool = True):
+        """Train using improved self-play with two separate networks"""
+        if verbose:
+            print("Starting Raw Neural CFR Training (Improved Self-Play)")
+            print(f"Mode: Two separate networks playing against each other")
+            print(f"Iterations: {self.iterations}")
+            print(f"Initial epsilon: {self.initial_epsilon} -> {self.final_epsilon}")
+            print(f"Initial temperature: {self.initial_temperature} -> {self.final_temperature}")
+            print("=" * 60)
+
+        start_time = time.time()
+
+        # Track separate losses for each network
+        main_losses = []
+        opponent_losses = []
+
+        for iteration in range(self.iterations):
+            self.iteration_count = iteration
+
+            # Update exploration parameters
+            progress = iteration / self.iterations
+            self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
+
+            # Exponential decay for temperature
+            decay_rate = 5.0
+            temp_range = self.initial_temperature - self.final_temperature
+            self.temperature = self.final_temperature + temp_range * math.exp(-decay_rate * progress)
+
+            # Sample game trajectory with both networks
+            trajectory = self._sample_game_trajectory_improved()
+
+            # Update regrets
+            self._update_regrets(trajectory)
+
+            # Separate experiences by network
+            main_experiences = []
+            opponent_experiences = []
+
+            for exp in trajectory:
+                if exp.get('network') == 'main':
+                    main_experiences.append(exp)
+                else:
+                    opponent_experiences.append(exp)
+
+            # Store experiences
+            for exp in trajectory:
+                self.experience_buffer.append(exp)
+
+            # Train both networks when buffer is large enough
+            if len(self.experience_buffer) >= self.batch_size * 2:
+                # Train main network on main player experiences
+                if main_experiences:
+                    main_loss = self._train_on_batch_for_network(self.network, self.optimizer, 'main')
+                    main_losses.append(main_loss)
+
+                # Train opponent network on opponent player experiences
+                if opponent_experiences:
+                    opponent_loss = self._train_on_batch_for_network(self.opponent_network, self.opponent_optimizer, 'opponent')
+                    opponent_losses.append(opponent_loss)
+
+            # Periodically swap networks to ensure diversity
+            if iteration % 1000 == 999:
+                # 50% chance to swap which network plays as Player 1
+                if random.random() < 0.5:
+                    self.network, self.opponent_network = self.opponent_network, self.network
+                    self.optimizer, self.opponent_optimizer = self.opponent_optimizer, self.optimizer
+                    if verbose:
+                        print(f"  Swapped networks at iteration {iteration}")
+
+            # Progress update
+            if verbose and iteration % max(1, self.iterations // 20) == 0:
+                elapsed = time.time() - start_time
+                avg_main_loss = np.mean(main_losses[-100:]) if main_losses else 0
+                avg_opp_loss = np.mean(opponent_losses[-100:]) if opponent_losses else 0
+                print(f"Iteration {iteration}/{self.iterations} | "
+                      f"Time: {elapsed:.1f}s | Main Loss: {avg_main_loss:.4f} | "
+                      f"Opp Loss: {avg_opp_loss:.4f} | "
+                      f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
+
+        if verbose:
+            print(f"\nImproved self-play training complete in {time.time() - start_time:.1f} seconds")
+
+    def _train_on_batch_for_network(self, network: nn.Module, optimizer: optim.Optimizer, network_type: str) -> float:
+        """Train a specific network on a batch of experiences"""
+        # Sample experiences for this network
+        network_experiences = [exp for exp in self.experience_buffer if exp.get('network') == network_type]
+
+        if len(network_experiences) < self.batch_size:
+            # Not enough experiences for this network yet
+            return 0.0
+
+        batch = random.sample(network_experiences, min(self.batch_size, len(network_experiences)))
+
+        total_loss = 0
+
+        for experience in batch:
+            game_state = experience['state']
+            action = experience['action']
+            utility = experience['utility']
+
+            # Forward pass
+            strategy, value = network(game_state)
+
+            # Calculate advantage
+            with torch.no_grad():
+                baseline = value.item()
+                advantage = utility - baseline
+                advantage = np.clip(advantage, -10, 10)
+
+            # Policy gradient loss
+            log_probs = F.log_softmax(strategy, dim=0)
+            log_probs = torch.clamp(log_probs, min=-10)
+            policy_loss = -log_probs[action] * advantage
+
+            # Value loss
+            value_target = torch.FloatTensor([utility])
+            value_loss = F.smooth_l1_loss(value, value_target)
+
+            # Combined loss
+            loss = 0.1 * policy_loss + 0.5 * value_loss
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        return total_loss / len(batch)
 
     def _sample_game_trajectory(self) -> List[Dict]:
         """Sample a complete game trajectory with exploration"""
@@ -507,6 +651,168 @@ class RawNeuralCFR:
             exp['baseline'] = 0  # Will be replaced with actual value prediction
 
         return trajectory
+
+    def _sample_game_trajectory_improved(self) -> List[Dict]:
+        """Sample a game trajectory using two different networks for improved self-play"""
+        trajectory = []
+
+        # Initialize game state
+        deck = Deck()
+
+        # Deal hole cards
+        p1_cards = [deck.draw(), deck.draw()]
+        p2_cards = [deck.draw(), deck.draw()]
+
+        # Track starting chips
+        starting_chips = [1000, 1000]
+
+        # Initial game state for player 1
+        game_state = {
+            'hole_cards': p1_cards,
+            'community_cards': [],
+            'pot': 3,
+            'stacks': [999, 998],
+            'current_player': 0,
+            'button': 0,
+            'current_bets': [1, 2],
+            'active_players': [True, True],
+            'stage': 0,
+            'action_history': [],
+            'legal_actions': [1, 0, 1, 1, 1, 1, 1, 1]
+        }
+
+        # Play through the hand
+        for stage in range(4):
+            if stage == 1:  # Flop
+                game_state['community_cards'] = deck.draw(3)
+            elif stage == 2:  # Turn
+                turn_card = deck.draw()
+                if turn_card:
+                    game_state['community_cards'].append(turn_card)
+            elif stage == 3:  # River
+                river_card = deck.draw()
+                if river_card:
+                    game_state['community_cards'].append(river_card)
+
+            game_state['stage'] = stage
+
+            # Betting round
+            betting_complete = False
+            num_actions = 0
+
+            while not betting_complete and num_actions < 10:
+                current_player = game_state['current_player']
+
+                # Create state from current player's perspective
+                if current_player == 0:
+                    player_state = game_state.copy()
+                    player_state['hole_cards'] = p1_cards
+                    # Use main network for player 1
+                    action, action_probs = self._get_action_with_exploration_for_network(
+                        player_state, self.network
+                    )
+                else:
+                    player_state = game_state.copy()
+                    player_state['hole_cards'] = p2_cards
+                    # Swap stacks and bets for player 2's perspective
+                    player_state['stacks'] = [game_state['stacks'][1], game_state['stacks'][0]]
+                    player_state['current_bets'] = [game_state['current_bets'][1], game_state['current_bets'][0]]
+                    # Use opponent network for player 2
+                    action, action_probs = self._get_action_with_exploration_for_network(
+                        player_state, self.opponent_network
+                    )
+
+                # Store experience
+                experience = {
+                    'state': player_state.copy(),
+                    'action': action,
+                    'action_probs': action_probs,
+                    'player': current_player,
+                    'network': 'main' if current_player == 0 else 'opponent'
+                }
+                trajectory.append(experience)
+
+                # Update game state
+                game_state = self._apply_action(game_state, action)
+
+                # Check if betting round is complete
+                if action == CFRAction.FOLD.value:
+                    betting_complete = True
+                elif all(game_state['current_bets'][i] == max(game_state['current_bets'])
+                        for i in range(2) if game_state['active_players'][i]):
+                    betting_complete = True
+
+                num_actions += 1
+
+            # Check if hand is over
+            if sum(game_state['active_players']) <= 1:
+                break
+
+        # Calculate utilities
+        winner = self._determine_winner(game_state, p1_cards, p2_cards)
+        final_stacks = game_state['stacks']
+
+        BIG_BLIND = 20
+        final_utilities = [
+            (final_stacks[0] - starting_chips[0]) / BIG_BLIND,
+            (final_stacks[1] - starting_chips[1]) / BIG_BLIND
+        ]
+
+        # Calculate returns with discounting
+        discount = 0.95
+        player_returns = [None, None]
+
+        for i in range(len(trajectory) - 1, -1, -1):
+            exp = trajectory[i]
+            player = exp['player']
+
+            if player_returns[player] is None:
+                exp['utility'] = final_utilities[player]
+                player_returns[player] = final_utilities[player]
+            else:
+                exp['utility'] = player_returns[player] * discount
+                player_returns[player] = exp['utility']
+
+            exp['baseline'] = 0
+
+        return trajectory
+
+    def _get_action_with_exploration_for_network(self, game_state: Dict, network: nn.Module) -> Tuple[int, np.ndarray]:
+        """Get action using a specific network"""
+        with torch.no_grad():
+            strategy, value = network(game_state)
+
+            # Apply temperature to logits
+            strategy = strategy / self.temperature
+
+            # Convert to probabilities
+            action_probs = F.softmax(strategy, dim=0).numpy()
+
+            # Apply legal action mask
+            legal_actions = np.array(game_state['legal_actions'])
+            action_probs = action_probs * legal_actions
+
+            # Renormalize
+            if action_probs.sum() > 0:
+                action_probs = action_probs / action_probs.sum()
+            else:
+                if legal_actions.sum() > 0:
+                    action_probs = legal_actions / legal_actions.sum()
+                else:
+                    action_probs = np.zeros(8)
+                    action_probs[0] = 1.0  # FOLD
+
+            # Epsilon-greedy exploration
+            if random.random() < self.epsilon:
+                legal_indices = np.where(legal_actions > 0)[0]
+                if len(legal_indices) > 0:
+                    action = np.random.choice(legal_indices)
+                else:
+                    action = 0  # FOLD
+            else:
+                action = np.random.choice(len(action_probs), p=action_probs)
+
+        return action, action_probs
 
     def _get_action_with_exploration(self, game_state: Dict) -> Tuple[int, np.ndarray]:
         """Get action using epsilon-greedy and temperature sampling"""
@@ -937,8 +1243,8 @@ class RawNeuralCFR:
         checkpoint = {
             'type': 'raw_neural_cfr',  # Add type flag for model identification
             'network_state': self.network.state_dict(),
-            'target_network_state': self.target_network.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
+            'use_improved_selfplay': self.use_improved_selfplay,
             'regret_sum': dict(self.regret_sum),
             'strategy_sum': dict(self.strategy_sum),
             'training_stats': self.training_stats,
@@ -954,6 +1260,15 @@ class RawNeuralCFR:
             # Save last 1000 experiences for continuity
             'recent_experiences': list(self.experience_buffer)[-1000:] if self.experience_buffer else []
         }
+
+        if self.use_improved_selfplay:
+            # Save both networks for improved self-play
+            checkpoint['opponent_network_state'] = self.opponent_network.state_dict()
+            checkpoint['opponent_optimizer_state'] = self.opponent_optimizer.state_dict()
+        else:
+            # Save target network for normal self-play
+            checkpoint['target_network_state'] = self.target_network.state_dict()
+
         with open(filename, 'wb') as f:
             pickle.dump(checkpoint, f)
 
@@ -966,24 +1281,42 @@ class RawNeuralCFR:
         if 'type' in checkpoint and checkpoint['type'] != 'raw_neural_cfr':
             print(f"Warning: Loading model with type '{checkpoint['type']}' as Raw Neural CFR")
 
+        # Check if model was trained with improved self-play
+        self.use_improved_selfplay = checkpoint.get('use_improved_selfplay', False)
+
         # Check if the model has a different hidden dimension
         if 'hidden_dim' in checkpoint and checkpoint['hidden_dim'] != self.hidden_dim:
             print(f"Note: Model was trained with hidden_dim={checkpoint['hidden_dim']}, but current is {self.hidden_dim}")
             # Recreate networks with the correct hidden dimension
             self.hidden_dim = checkpoint['hidden_dim']
             self.network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
-            self.target_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
             self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
+
+            if self.use_improved_selfplay:
+                self.opponent_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
+                self.opponent_optimizer = optim.Adam(self.opponent_network.parameters(), lr=self.learning_rate)
+            else:
+                self.target_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
 
-        # Load target network if available
-        if 'target_network_state' in checkpoint:
-            self.target_network.load_state_dict(checkpoint['target_network_state'])
+        if self.use_improved_selfplay:
+            # Load opponent network for improved self-play
+            if 'opponent_network_state' in checkpoint:
+                self.opponent_network.load_state_dict(checkpoint['opponent_network_state'])
+                if 'opponent_optimizer_state' in checkpoint:
+                    self.opponent_optimizer.load_state_dict(checkpoint['opponent_optimizer_state'])
+            else:
+                print("Warning: No opponent network found in checkpoint, creating a copy of main network")
+                self.opponent_network.load_state_dict(self.network.state_dict())
         else:
-            # If no target network saved, copy from main network
-            self.target_network.load_state_dict(self.network.state_dict())
+            # Load target network for normal self-play
+            if 'target_network_state' in checkpoint:
+                self.target_network.load_state_dict(checkpoint['target_network_state'])
+            else:
+                # If no target network saved, copy from main network
+                self.target_network.load_state_dict(self.network.state_dict())
 
         self.regret_sum = defaultdict(lambda: np.zeros(8), checkpoint['regret_sum'])
         self.strategy_sum = defaultdict(lambda: np.zeros(8), checkpoint['strategy_sum'])

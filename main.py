@@ -236,6 +236,14 @@ def main():
                 iterations = int(input("Number of iterations: ") or "25000")
                 config_name = "Custom"
 
+            # Self-play mode selection
+            print("\nSelect self-play mode:")
+            print("1. Normal Self-Play (single network with checkpoint)")
+            print("2. Improved Self-Play (two separate networks)")
+            selfplay_choice = input("Choose self-play mode (1-2, default: 1): ") or "1"
+
+            use_improved_selfplay = (selfplay_choice == '2')
+
             # Model size selection
             print("\nSelect model size:")
             print("1. Small (256 hidden units - faster training, less memory)")
@@ -267,7 +275,9 @@ def main():
                 if bs:
                     batch_size = int(bs)
 
+            selfplay_mode = "Improved" if use_improved_selfplay else "Normal"
             print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
+            print(f"Self-Play Mode: {selfplay_mode}")
             print(f"Model: {size_name} ({hidden_dim} hidden units)")
             print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
             print("This version learns strategies directly from raw game data.")
@@ -278,7 +288,8 @@ def main():
                 iterations=iterations,
                 learning_rate=learning_rate,
                 batch_size=batch_size,
-                hidden_dim=hidden_dim
+                hidden_dim=hidden_dim,
+                use_improved_selfplay=use_improved_selfplay
             )
 
             cfr_ai.train(verbose=True)
@@ -303,11 +314,12 @@ def main():
         # Save model
         save_choice = input("\nSave trained model? (y/n): ")
         if save_choice.lower() == 'y':
-            # Include model size in filename if not standard
+            # Include self-play mode and model size in filename
+            selfplay_suffix = "_improved" if use_improved_selfplay else ""
             if 'hidden_dim' in locals() and hidden_dim != 512:
-                model_name = f"raw_neural_{config_name.lower()}_{hidden_dim}d.pkl"
+                model_name = f"raw_neural_{config_name.lower()}_{hidden_dim}d{selfplay_suffix}.pkl"
             else:
-                model_name = f"raw_neural_{config_name.lower()}.pkl"
+                model_name = f"raw_neural_{config_name.lower()}{selfplay_suffix}.pkl"
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists
