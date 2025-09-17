@@ -125,17 +125,6 @@ def load_cfr_model_by_type(filename: str, verbose: bool = True):
         model.load(filename)
         return model, model_info
 
-    elif model_type == 'ImprovedNeuralEnhancedCFR':
-        from cfr.improved_neural_cfr import ImprovedNeuralEnhancedCFR
-        model = ImprovedNeuralEnhancedCFR()
-        model.load(filename)
-        return model, model_info
-
-    elif model_type == 'BalancedNeuralCFR':
-        from cfr.balanced_neural_cfr import BalancedNeuralCFR
-        model = BalancedNeuralCFR()
-        model.load(filename)
-        return model, model_info
 
     elif model_type == 'StrategySelectorCFR':
         from cfr.strategy_selector_cfr import StrategySelectorCFR
@@ -267,91 +256,6 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
 
         return NeuralEnhancedTwoPlayerCFRGameWrapper(model)
 
-    elif model_type == 'ImprovedNeuralEnhancedCFR':
-        class ImprovedNeuralCFRGameWrapper:
-            def __init__(self, cfr_ai):
-                self.cfr_ai = cfr_ai
-                self.epsilon = 0
-
-            def choose_action(self, state, valid_actions, **kwargs):
-                return self.cfr_ai.get_action(
-                    hole_cards=getattr(state, 'hole_cards', []),
-                    community_cards=getattr(state, 'community_cards', []),
-                    betting_history=getattr(state, 'betting_history', ''),
-                    pot_size=getattr(state, 'pot_size', 0),
-                    to_call=getattr(state, 'to_call', 0),
-                    stack_size=getattr(state, 'stack_size', 1000),
-                    position=getattr(state, 'position', 0),
-                    opponent_stack=kwargs.get('opponent_stack', 1000)
-                )
-
-            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
-                return self.cfr_ai.get_raise_size(pot, current_bet, player_chips, min_raise)
-
-            def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
-                                 player_bet, num_players, players_in_hand, position=0,
-                                 action_history=None, opponent_bets=None, hand_phase=0):
-                """Create state object for Improved Neural CFR"""
-                class CFRState:
-                    def __init__(self, hand, community_cards, pot, current_bet, player_chips,
-                               player_bet, num_players, action_history, position):
-                        self.hole_cards = hand
-                        self.community_cards = community_cards
-                        self.pot_size = pot
-                        self.to_call = max(0, current_bet - player_bet)
-                        self.stack_size = player_chips
-                        self.position = position
-                        self.num_players = num_players
-                        self.action_history = action_history[-10:] if action_history else []
-                        self.betting_history = ''
-
-                return CFRState(hand, community_cards, pot, current_bet, player_chips,
-                              player_bet, num_players, action_history, position)
-
-        return ImprovedNeuralCFRGameWrapper(model)
-
-    elif model_type == 'BalancedNeuralCFR':
-        class BalancedNeuralCFRGameWrapper:
-            def __init__(self, cfr_ai):
-                self.cfr_ai = cfr_ai
-                self.epsilon = 0
-
-            def choose_action(self, state, valid_actions, **kwargs):
-                return self.cfr_ai.get_action(
-                    hole_cards=getattr(state, 'hole_cards', []),
-                    community_cards=getattr(state, 'community_cards', []),
-                    betting_history=getattr(state, 'betting_history', ''),
-                    pot_size=getattr(state, 'pot_size', 0),
-                    to_call=getattr(state, 'to_call', 0),
-                    stack_size=getattr(state, 'stack_size', 1000),
-                    position=getattr(state, 'position', 0),
-                    opponent_stack=kwargs.get('opponent_stack', 1000)
-                )
-
-            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000, player_current_bet=0, min_raise=20):
-                return self.cfr_ai.get_raise_size(pot, current_bet, player_chips, min_raise)
-
-            def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
-                                 player_bet, num_players, players_in_hand, position=0,
-                                 action_history=None, opponent_bets=None, hand_phase=0):
-                """Create state object for Balanced Neural CFR"""
-                class CFRState:
-                    def __init__(self, hand, community_cards, pot, current_bet, player_chips,
-                               player_bet, num_players, action_history, position):
-                        self.hole_cards = hand
-                        self.community_cards = community_cards
-                        self.pot_size = pot
-                        self.to_call = max(0, current_bet - player_bet)
-                        self.stack_size = player_chips
-                        self.position = position
-                        self.num_players = num_players
-                        self.action_history = action_history[-10:] if action_history else []
-                        self.betting_history = ''
-
-                return CFRState(hand, community_cards, pot, current_bet, player_chips,
-                              player_bet, num_players, action_history, position)
-
-        return BalancedNeuralCFRGameWrapper(model)
 
     elif model_type == 'RawNeuralCFR':
         class RawNeuralCFRGameWrapper:
@@ -593,13 +497,6 @@ def evaluate_model_by_type(model, model_info: Dict[str, Any], num_games: int = 1
         from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
         return evaluate_two_player_cfr_ai(model, num_games=num_games, verbose=verbose, use_strong_opponents=use_strong_opponents)
 
-    elif model_type == 'ImprovedNeuralEnhancedCFR':
-        from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
-        return evaluate_two_player_cfr_ai(model, num_games=num_games, verbose=verbose, use_strong_opponents=use_strong_opponents)
-
-    elif model_type == 'BalancedNeuralCFR':
-        from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
-        return evaluate_two_player_cfr_ai(model, num_games=num_games, verbose=verbose, use_strong_opponents=use_strong_opponents)
 
     elif model_type == 'StrategySelectorCFR':
         from cfr.cfr_two_player_evaluation import evaluate_two_player_cfr_ai
