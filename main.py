@@ -236,13 +236,23 @@ def main():
                 iterations = int(input("Number of iterations: ") or "25000")
                 config_name = "Custom"
 
-            # Self-play mode selection
-            print("\nSelect self-play mode:")
+            # Training mode selection
+            print("\nSelect training mode:")
             print("1. Normal Self-Play (single network with checkpoint)")
-            print("2. Improved Self-Play (two separate networks)")
-            selfplay_choice = input("Choose self-play mode (1-2, default: 1): ") or "1"
+            print("2. Mixed Training (train against random, DQN, and self)")
+            training_choice = input("Choose training mode (1-2, default: 1): ") or "1"
 
-            use_improved_selfplay = (selfplay_choice == '2')
+            use_mixed_training = (training_choice == '2')
+            mixed_training_weights = None
+
+            if use_mixed_training:
+                print("\nMixed training opponent weights (default: self=50%, random=30%, dqn=20%)")
+                custom_weights = input("Customize weights? (y/n, default: n): ")
+                if custom_weights.lower() == 'y':
+                    self_weight = float(input("Self-play weight (0-1, default: 0.5): ") or "0.5")
+                    random_weight = float(input("Random opponent weight (0-1, default: 0.3): ") or "0.3")
+                    dqn_weight = float(input("DQN opponent weight (0-1, default: 0.2): ") or "0.2")
+                    mixed_training_weights = {'self': self_weight, 'random': random_weight, 'dqn': dqn_weight}
 
             # Model size selection
             print("\nSelect model size:")
@@ -275,9 +285,9 @@ def main():
                 if bs:
                     batch_size = int(bs)
 
-            selfplay_mode = "Improved" if use_improved_selfplay else "Normal"
+            training_mode = "Mixed Training" if use_mixed_training else "Normal Self-Play"
             print(f"\nTraining Raw Neural CFR ({config_name} - {iterations:,} iterations)...")
-            print(f"Self-Play Mode: {selfplay_mode}")
+            print(f"Training Mode: {training_mode}")
             print(f"Model: {size_name} ({hidden_dim} hidden units)")
             print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
             print("This version learns strategies directly from raw game data.")
@@ -289,7 +299,8 @@ def main():
                 learning_rate=learning_rate,
                 batch_size=batch_size,
                 hidden_dim=hidden_dim,
-                use_improved_selfplay=use_improved_selfplay
+                use_mixed_training=use_mixed_training,
+                mixed_training_weights=mixed_training_weights
             )
 
             cfr_ai.train(verbose=True)
@@ -314,12 +325,12 @@ def main():
         # Save model
         save_choice = input("\nSave trained model? (y/n): ")
         if save_choice.lower() == 'y':
-            # Include self-play mode and model size in filename
-            selfplay_suffix = "_improved" if use_improved_selfplay else ""
+            # Include training mode and model size in filename
+            training_suffix = "_mixed" if use_mixed_training else ""
             if 'hidden_dim' in locals() and hidden_dim != 512:
-                model_name = f"raw_neural_{config_name.lower()}_{hidden_dim}d{selfplay_suffix}.pkl"
+                model_name = f"raw_neural_{config_name.lower()}_{hidden_dim}d{training_suffix}.pkl"
             else:
-                model_name = f"raw_neural_{config_name.lower()}{selfplay_suffix}.pkl"
+                model_name = f"raw_neural_{config_name.lower()}{training_suffix}.pkl"
             filename = input(f"Filename (default: models/cfr/{model_name}): ") or f"models/cfr/{model_name}"
 
             # Ensure directory exists

@@ -12,6 +12,7 @@ import random
 import pickle
 import time
 import math
+import os
 from collections import defaultdict, deque
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum
@@ -295,12 +296,24 @@ class RawNeuralCFR:
                  batch_size: int = 32, buffer_size: int = 100000,
                  initial_epsilon: float = 0.3, final_epsilon: float = 0.05,
                  initial_temperature: float = 1.0, final_temperature: float = 0.1,
-                 hidden_dim: int = 512, use_improved_selfplay: bool = False):
+                 hidden_dim: int = 512, use_mixed_training: bool = False,
+                 mixed_training_weights: Dict = None):
         self.iterations = iterations
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.hidden_dim = hidden_dim
-        self.use_improved_selfplay = use_improved_selfplay
+
+        # Mixed training setup
+        self.use_mixed_training = use_mixed_training
+        if mixed_training_weights is None:
+            self.mixed_training_weights = {'self': 0.5, 'random': 0.3, 'dqn': 0.2}
+        else:
+            self.mixed_training_weights = mixed_training_weights
+
+        # Normalize weights
+        total_weight = sum(self.mixed_training_weights.values())
+        for key in self.mixed_training_weights:
+            self.mixed_training_weights[key] /= total_weight
 
         # Exploration parameters
         self.initial_epsilon = initial_epsilon
@@ -316,18 +329,15 @@ class RawNeuralCFR:
         self.network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
 
-        if use_improved_selfplay:
-            # For improved self-play, create a second network as opponent
-            self.opponent_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
-            self.opponent_optimizer = optim.Adam(self.opponent_network.parameters(), lr=learning_rate)
-            # No target network needed in improved self-play
-            self.target_network = None
-            self.update_target_every = None
-        else:
-            # Normal self-play: use target network
-            self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
-            self.target_network.load_state_dict(self.network.state_dict())
-            self.update_target_every = 500  # Back to higher value for normal mode
+        # Target network for self-play
+        self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
+        self.target_network.load_state_dict(self.network.state_dict())
+        self.update_target_every = 500
+
+        # Load DQN opponents for mixed training
+        self.dqn_opponents = []
+        if use_mixed_training and self.mixed_training_weights.get('dqn', 0) > 0:
+            self._load_dqn_opponents()
 
         # Experience replay buffer
         self.experience_buffer = deque(maxlen=buffer_size)
@@ -347,13 +357,58 @@ class RawNeuralCFR:
             'temperature': []
         }
 
+    def _load_dqn_opponents(self):
+        """Load DQN benchmark models as opponents"""
+        # Import here to avoid circular dependencies
+        from dqn.poker_ai import PokerAI
+
+        potential_paths = [
+            'models/dqn/tuned_ai_v2.pth',
+            'models/dqn/tuned_ai_v4.pth',
+            'models/dqn/poker_ai_tuned.pth'
+        ]
+
+        for path in potential_paths:
+            if os.path.exists(path):
+                try:
+                    model = PokerAI()
+                    model.load(path)
+                    model.epsilon = 0  # No exploration during evaluation
+                    self.dqn_opponents.append(model)
+                    print(f"  Loaded DQN opponent: {os.path.basename(path)}")
+                except Exception as e:
+                    print(f"  Warning: Could not load {path}: {e}")
+
+        if not self.dqn_opponents:
+            print("  Warning: No DQN opponents found, using only self-play and random")
+            # Adjust weights if no DQN models available
+            if 'dqn' in self.mixed_training_weights:
+                dqn_weight = self.mixed_training_weights['dqn']
+                del self.mixed_training_weights['dqn']
+                # Redistribute weight
+                if 'self' in self.mixed_training_weights:
+                    self.mixed_training_weights['self'] += dqn_weight * 0.6
+                if 'random' in self.mixed_training_weights:
+                    self.mixed_training_weights['random'] += dqn_weight * 0.4
+                # Renormalize
+                total = sum(self.mixed_training_weights.values())
+                for key in self.mixed_training_weights:
+                    self.mixed_training_weights[key] /= total
+
     def train(self, verbose: bool = True):
         """Train the Raw Neural CFR"""
-        if self.use_improved_selfplay:
-            return self.train_improved_selfplay(verbose)
 
         if verbose:
-            print("Starting Raw Neural CFR Training (Normal Self-Play)")
+            if self.use_mixed_training:
+                print("Starting Raw Neural CFR Training (Mixed Training)")
+                print(f"Opponent distribution:")
+                for opponent_type, weight in self.mixed_training_weights.items():
+                    print(f"  {opponent_type}: {weight:.1%}")
+                if self.dqn_opponents:
+                    print(f"  DQN models loaded: {len(self.dqn_opponents)}")
+            else:
+                print("Starting Raw Neural CFR Training (Normal Self-Play)")
+
             print(f"Iterations: {self.iterations}")
             print(f"Initial epsilon: {self.initial_epsilon} -> {self.final_epsilon}")
             print(f"Initial temperature: {self.initial_temperature} -> {self.final_temperature}")
@@ -361,6 +416,9 @@ class RawNeuralCFR:
             print("=" * 60)
 
         start_time = time.time()
+
+        # Track stats for mixed training
+        opponent_counts = {'self': 0, 'random': 0, 'dqn': 0} if self.use_mixed_training else None
 
         for iteration in range(self.iterations):
             self.iteration_count = iteration
@@ -377,7 +435,12 @@ class RawNeuralCFR:
             self.temperature = self.final_temperature + temp_range * math.exp(-decay_rate * progress)
 
             # Sample game trajectory with exploration
-            trajectory = self._sample_game_trajectory()
+            if self.use_mixed_training:
+                trajectory, opponent_type = self._sample_mixed_training_trajectory()
+                if opponent_type in opponent_counts:
+                    opponent_counts[opponent_type] += 1
+            else:
+                trajectory = self._sample_game_trajectory()
 
             # Calculate advantages and update regrets
             self._update_regrets(trajectory)
@@ -399,143 +462,22 @@ class RawNeuralCFR:
             if verbose and iteration % max(1, self.iterations // 20) == 0:
                 elapsed = time.time() - start_time
                 avg_loss = np.mean(self.training_stats['loss'][-100:]) if self.training_stats['loss'] else 0
-                print(f"Iteration {iteration}/{self.iterations} | "
-                      f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
-                      f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
+
+                if self.use_mixed_training and opponent_counts:
+                    # Show opponent distribution
+                    opp_str = " | ".join([f"{k}:{v}" for k, v in opponent_counts.items()])
+                    print(f"Iteration {iteration}/{self.iterations} | "
+                          f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
+                          f"Opponents: {opp_str} | "
+                          f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
+                else:
+                    print(f"Iteration {iteration}/{self.iterations} | "
+                          f"Time: {elapsed:.1f}s | Loss: {avg_loss:.4f} | "
+                          f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
 
         if verbose:
             print(f"\nTraining complete in {time.time() - start_time:.1f} seconds")
 
-    def train_improved_selfplay(self, verbose: bool = True):
-        """Train using improved self-play with two separate networks"""
-        if verbose:
-            print("Starting Raw Neural CFR Training (Improved Self-Play)")
-            print(f"Mode: Two separate networks playing against each other")
-            print(f"Iterations: {self.iterations}")
-            print(f"Initial epsilon: {self.initial_epsilon} -> {self.final_epsilon}")
-            print(f"Initial temperature: {self.initial_temperature} -> {self.final_temperature}")
-            print("=" * 60)
-
-        start_time = time.time()
-
-        # Track separate losses for each network
-        main_losses = []
-        opponent_losses = []
-
-        for iteration in range(self.iterations):
-            self.iteration_count = iteration
-
-            # Update exploration parameters
-            progress = iteration / self.iterations
-            self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
-
-            # Exponential decay for temperature
-            decay_rate = 5.0
-            temp_range = self.initial_temperature - self.final_temperature
-            self.temperature = self.final_temperature + temp_range * math.exp(-decay_rate * progress)
-
-            # Sample game trajectory with both networks
-            trajectory = self._sample_game_trajectory_improved()
-
-            # Update regrets
-            self._update_regrets(trajectory)
-
-            # Separate experiences by network
-            main_experiences = []
-            opponent_experiences = []
-
-            for exp in trajectory:
-                if exp.get('network') == 'main':
-                    main_experiences.append(exp)
-                else:
-                    opponent_experiences.append(exp)
-
-            # Store experiences
-            for exp in trajectory:
-                self.experience_buffer.append(exp)
-
-            # Train both networks when buffer is large enough
-            if len(self.experience_buffer) >= self.batch_size * 2:
-                # Train main network on main player experiences
-                if main_experiences:
-                    main_loss = self._train_on_batch_for_network(self.network, self.optimizer, 'main')
-                    main_losses.append(main_loss)
-
-                # Train opponent network on opponent player experiences
-                if opponent_experiences:
-                    opponent_loss = self._train_on_batch_for_network(self.opponent_network, self.opponent_optimizer, 'opponent')
-                    opponent_losses.append(opponent_loss)
-
-            # Periodically swap networks to ensure diversity
-            if iteration % 1000 == 999:
-                # 50% chance to swap which network plays as Player 1
-                if random.random() < 0.5:
-                    self.network, self.opponent_network = self.opponent_network, self.network
-                    self.optimizer, self.opponent_optimizer = self.opponent_optimizer, self.optimizer
-                    if verbose:
-                        print(f"  Swapped networks at iteration {iteration}")
-
-            # Progress update
-            if verbose and iteration % max(1, self.iterations // 20) == 0:
-                elapsed = time.time() - start_time
-                avg_main_loss = np.mean(main_losses[-100:]) if main_losses else 0
-                avg_opp_loss = np.mean(opponent_losses[-100:]) if opponent_losses else 0
-                print(f"Iteration {iteration}/{self.iterations} | "
-                      f"Time: {elapsed:.1f}s | Main Loss: {avg_main_loss:.4f} | "
-                      f"Opp Loss: {avg_opp_loss:.4f} | "
-                      f"eps: {self.epsilon:.3f} | T: {self.temperature:.2f}")
-
-        if verbose:
-            print(f"\nImproved self-play training complete in {time.time() - start_time:.1f} seconds")
-
-    def _train_on_batch_for_network(self, network: nn.Module, optimizer: optim.Optimizer, network_type: str) -> float:
-        """Train a specific network on a batch of experiences"""
-        # Sample experiences for this network
-        network_experiences = [exp for exp in self.experience_buffer if exp.get('network') == network_type]
-
-        if len(network_experiences) < self.batch_size:
-            # Not enough experiences for this network yet
-            return 0.0
-
-        batch = random.sample(network_experiences, min(self.batch_size, len(network_experiences)))
-
-        total_loss = 0
-
-        for experience in batch:
-            game_state = experience['state']
-            action = experience['action']
-            utility = experience['utility']
-
-            # Forward pass
-            strategy, value = network(game_state)
-
-            # Calculate advantage
-            with torch.no_grad():
-                baseline = value.item()
-                advantage = utility - baseline
-                advantage = np.clip(advantage, -10, 10)
-
-            # Policy gradient loss
-            log_probs = F.log_softmax(strategy, dim=0)
-            log_probs = torch.clamp(log_probs, min=-10)
-            policy_loss = -log_probs[action] * advantage
-
-            # Value loss
-            value_target = torch.FloatTensor([utility])
-            value_loss = F.smooth_l1_loss(value, value_target)
-
-            # Combined loss
-            loss = 0.1 * policy_loss + 0.5 * value_loss
-
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=1.0)
-            optimizer.step()
-
-            total_loss += loss.item()
-
-        return total_loss / len(batch)
 
     def _sample_game_trajectory(self) -> List[Dict]:
         """Sample a complete game trajectory with exploration"""
@@ -652,21 +594,42 @@ class RawNeuralCFR:
 
         return trajectory
 
-    def _sample_game_trajectory_improved(self) -> List[Dict]:
-        """Sample a game trajectory using two different networks for improved self-play"""
+    def _sample_mixed_training_trajectory(self) -> Tuple[List[Dict], str]:
+        """Sample a trajectory with a randomly selected opponent type"""
+        # Choose opponent type based on weights
+        rand_val = random.random()
+        cumsum = 0
+        opponent_type = 'self'
+
+        for opp_type, weight in self.mixed_training_weights.items():
+            cumsum += weight
+            if rand_val < cumsum:
+                opponent_type = opp_type
+                break
+
+        # Sample trajectory based on opponent type
+        if opponent_type == 'self':
+            trajectory = self._sample_game_trajectory()  # Use existing self-play method
+        elif opponent_type == 'random':
+            trajectory = self._sample_trajectory_vs_random()
+        elif opponent_type == 'dqn':
+            trajectory = self._sample_trajectory_vs_dqn()
+        else:
+            # Fallback to self-play
+            trajectory = self._sample_game_trajectory()
+
+        return trajectory, opponent_type
+
+    def _sample_trajectory_vs_random(self) -> List[Dict]:
+        """Sample a game trajectory against a random opponent"""
         trajectory = []
 
-        # Initialize game state
+        # Initialize game
         deck = Deck()
-
-        # Deal hole cards
         p1_cards = [deck.draw(), deck.draw()]
         p2_cards = [deck.draw(), deck.draw()]
-
-        # Track starting chips
         starting_chips = [1000, 1000]
 
-        # Initial game state for player 1
         game_state = {
             'hole_cards': p1_cards,
             'community_cards': [],
@@ -683,13 +646,14 @@ class RawNeuralCFR:
 
         # Play through the hand
         for stage in range(4):
-            if stage == 1:  # Flop
+            # Deal community cards
+            if stage == 1:
                 game_state['community_cards'] = deck.draw(3)
-            elif stage == 2:  # Turn
+            elif stage == 2:
                 turn_card = deck.draw()
                 if turn_card:
                     game_state['community_cards'].append(turn_card)
-            elif stage == 3:  # River
+            elif stage == 3:
                 river_card = deck.draw()
                 if river_card:
                     game_state['community_cards'].append(river_card)
@@ -703,34 +667,27 @@ class RawNeuralCFR:
             while not betting_complete and num_actions < 10:
                 current_player = game_state['current_player']
 
-                # Create state from current player's perspective
                 if current_player == 0:
-                    player_state = game_state.copy()
-                    player_state['hole_cards'] = p1_cards
-                    # Use main network for player 1
-                    action, action_probs = self._get_action_with_exploration_for_network(
-                        player_state, self.network
-                    )
+                    # Our AI's turn
+                    action, action_probs = self._get_action_with_exploration(game_state)
                 else:
-                    player_state = game_state.copy()
-                    player_state['hole_cards'] = p2_cards
-                    # Swap stacks and bets for player 2's perspective
-                    player_state['stacks'] = [game_state['stacks'][1], game_state['stacks'][0]]
-                    player_state['current_bets'] = [game_state['current_bets'][1], game_state['current_bets'][0]]
-                    # Use opponent network for player 2
-                    action, action_probs = self._get_action_with_exploration_for_network(
-                        player_state, self.opponent_network
-                    )
+                    # Random opponent's turn
+                    legal_actions = game_state['legal_actions']
+                    legal_indices = [i for i, legal in enumerate(legal_actions) if legal]
+                    action = random.choice(legal_indices) if legal_indices else 0
+                    action_probs = np.zeros(8)
+                    for idx in legal_indices:
+                        action_probs[idx] = 1.0 / len(legal_indices)
 
-                # Store experience
-                experience = {
-                    'state': player_state.copy(),
-                    'action': action,
-                    'action_probs': action_probs,
-                    'player': current_player,
-                    'network': 'main' if current_player == 0 else 'opponent'
-                }
-                trajectory.append(experience)
+                # Store experience (only for our AI)
+                if current_player == 0:
+                    experience = {
+                        'state': game_state.copy(),
+                        'action': action,
+                        'action_probs': action_probs,
+                        'player': current_player
+                    }
+                    trajectory.append(experience)
 
                 # Update game state
                 game_state = self._apply_action(game_state, action)
@@ -758,61 +715,173 @@ class RawNeuralCFR:
             (final_stacks[1] - starting_chips[1]) / BIG_BLIND
         ]
 
-        # Calculate returns with discounting
+        # Process trajectory for our AI only
         discount = 0.95
-        player_returns = [None, None]
+        running_return = final_utilities[0]
 
         for i in range(len(trajectory) - 1, -1, -1):
-            exp = trajectory[i]
-            player = exp['player']
-
-            if player_returns[player] is None:
-                exp['utility'] = final_utilities[player]
-                player_returns[player] = final_utilities[player]
-            else:
-                exp['utility'] = player_returns[player] * discount
-                player_returns[player] = exp['utility']
-
-            exp['baseline'] = 0
+            trajectory[i]['utility'] = running_return
+            running_return *= discount
+            trajectory[i]['baseline'] = 0
 
         return trajectory
 
-    def _get_action_with_exploration_for_network(self, game_state: Dict, network: nn.Module) -> Tuple[int, np.ndarray]:
-        """Get action using a specific network"""
-        with torch.no_grad():
-            strategy, value = network(game_state)
+    def _sample_trajectory_vs_dqn(self) -> List[Dict]:
+        """Sample a game trajectory against a DQN opponent"""
+        if not self.dqn_opponents:
+            # Fallback to random if no DQN opponents
+            return self._sample_trajectory_vs_random()
 
-            # Apply temperature to logits
-            strategy = strategy / self.temperature
+        # Select a random DQN opponent
+        dqn_opponent = random.choice(self.dqn_opponents)
+        trajectory = []
 
-            # Convert to probabilities
-            action_probs = F.softmax(strategy, dim=0).numpy()
+        # Initialize game
+        deck = Deck()
+        p1_cards = [deck.draw(), deck.draw()]
+        p2_cards = [deck.draw(), deck.draw()]
+        starting_chips = [1000, 1000]
 
-            # Apply legal action mask
-            legal_actions = np.array(game_state['legal_actions'])
-            action_probs = action_probs * legal_actions
+        game_state = {
+            'hole_cards': p1_cards,
+            'community_cards': [],
+            'pot': 3,
+            'stacks': [999, 998],
+            'current_player': 0,
+            'button': 0,
+            'current_bets': [1, 2],
+            'active_players': [True, True],
+            'stage': 0,
+            'action_history': [],
+            'legal_actions': [1, 0, 1, 1, 1, 1, 1, 1]
+        }
 
-            # Renormalize
-            if action_probs.sum() > 0:
-                action_probs = action_probs / action_probs.sum()
-            else:
-                if legal_actions.sum() > 0:
-                    action_probs = legal_actions / legal_actions.sum()
+        # Play through the hand
+        for stage in range(4):
+            # Deal community cards
+            if stage == 1:
+                game_state['community_cards'] = deck.draw(3)
+            elif stage == 2:
+                turn_card = deck.draw()
+                if turn_card:
+                    game_state['community_cards'].append(turn_card)
+            elif stage == 3:
+                river_card = deck.draw()
+                if river_card:
+                    game_state['community_cards'].append(river_card)
+
+            game_state['stage'] = stage
+
+            # Betting round
+            betting_complete = False
+            num_actions = 0
+            action_history_dqn = []  # Track actions for DQN
+
+            while not betting_complete and num_actions < 10:
+                current_player = game_state['current_player']
+
+                if current_player == 0:
+                    # Our AI's turn
+                    action, action_probs = self._get_action_with_exploration(game_state)
                 else:
+                    # DQN opponent's turn
+                    # Convert to DQN state format
+                    valid_actions = []
+                    if game_state['legal_actions'][CFRAction.FOLD.value]:
+                        valid_actions.append(Action.FOLD)
+                    if game_state['legal_actions'][CFRAction.CHECK.value]:
+                        valid_actions.append(Action.CHECK)
+                    if game_state['legal_actions'][CFRAction.CALL.value]:
+                        valid_actions.append(Action.CALL)
+                    if any(game_state['legal_actions'][i] for i in [3, 4, 5, 6]):
+                        valid_actions.append(Action.RAISE)
+                    if game_state['legal_actions'][CFRAction.ALL_IN.value]:
+                        valid_actions.append(Action.ALL_IN)
+
+                    # Create DQN state
+                    to_call = max(game_state['current_bets']) - game_state['current_bets'][1]
+                    dqn_state = dqn_opponent.get_state_features(
+                        hand=p2_cards,
+                        community_cards=game_state['community_cards'],
+                        pot=game_state['pot'],
+                        current_bet=max(game_state['current_bets']),
+                        player_chips=game_state['stacks'][1],
+                        player_bet=game_state['current_bets'][1],
+                        num_players=2,
+                        players_in_hand=sum(game_state['active_players']),
+                        position=1,
+                        action_history=action_history_dqn,
+                        hand_phase=stage
+                    )
+
+                    # Get DQN action
+                    dqn_action = dqn_opponent.choose_action(dqn_state, valid_actions, training=False)
+                    action_history_dqn.append(dqn_action)
+
+                    # Convert DQN action to CFR action
+                    if dqn_action == Action.FOLD:
+                        action = CFRAction.FOLD.value
+                    elif dqn_action == Action.CHECK:
+                        action = CFRAction.CHECK.value
+                    elif dqn_action == Action.CALL:
+                        action = CFRAction.CALL.value
+                    elif dqn_action == Action.RAISE:
+                        action = CFRAction.BET_POT.value  # Use pot-sized bet for DQN raises
+                    elif dqn_action == Action.ALL_IN:
+                        action = CFRAction.ALL_IN.value
+                    else:
+                        action = CFRAction.FOLD.value
+
                     action_probs = np.zeros(8)
-                    action_probs[0] = 1.0  # FOLD
+                    action_probs[action] = 1.0
 
-            # Epsilon-greedy exploration
-            if random.random() < self.epsilon:
-                legal_indices = np.where(legal_actions > 0)[0]
-                if len(legal_indices) > 0:
-                    action = np.random.choice(legal_indices)
-                else:
-                    action = 0  # FOLD
-            else:
-                action = np.random.choice(len(action_probs), p=action_probs)
+                # Store experience (only for our AI)
+                if current_player == 0:
+                    experience = {
+                        'state': game_state.copy(),
+                        'action': action,
+                        'action_probs': action_probs,
+                        'player': current_player
+                    }
+                    trajectory.append(experience)
+                    action_history_dqn.append(Action(action % 5))  # Approximate CFR action to DQN action
 
-        return action, action_probs
+                # Update game state
+                game_state = self._apply_action(game_state, action)
+
+                # Check if betting round is complete
+                if action == CFRAction.FOLD.value:
+                    betting_complete = True
+                elif all(game_state['current_bets'][i] == max(game_state['current_bets'])
+                        for i in range(2) if game_state['active_players'][i]):
+                    betting_complete = True
+
+                num_actions += 1
+
+            # Check if hand is over
+            if sum(game_state['active_players']) <= 1:
+                break
+
+        # Calculate utilities
+        winner = self._determine_winner(game_state, p1_cards, p2_cards)
+        final_stacks = game_state['stacks']
+
+        BIG_BLIND = 20
+        final_utilities = [
+            (final_stacks[0] - starting_chips[0]) / BIG_BLIND,
+            (final_stacks[1] - starting_chips[1]) / BIG_BLIND
+        ]
+
+        # Process trajectory for our AI only
+        discount = 0.95
+        running_return = final_utilities[0]
+
+        for i in range(len(trajectory) - 1, -1, -1):
+            trajectory[i]['utility'] = running_return
+            running_return *= discount
+            trajectory[i]['baseline'] = 0
+
+        return trajectory
 
     def _get_action_with_exploration(self, game_state: Dict) -> Tuple[int, np.ndarray]:
         """Get action using epsilon-greedy and temperature sampling"""
@@ -1244,7 +1313,8 @@ class RawNeuralCFR:
             'type': 'raw_neural_cfr',  # Add type flag for model identification
             'network_state': self.network.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
-            'use_improved_selfplay': self.use_improved_selfplay,
+            'use_mixed_training': self.use_mixed_training,
+            'mixed_training_weights': self.mixed_training_weights if self.use_mixed_training else None,
             'regret_sum': dict(self.regret_sum),
             'strategy_sum': dict(self.strategy_sum),
             'training_stats': self.training_stats,
@@ -1258,16 +1328,10 @@ class RawNeuralCFR:
             'final_temperature': self.final_temperature,
             'hidden_dim': self.hidden_dim,  # Save the hidden dimension
             # Save last 1000 experiences for continuity
-            'recent_experiences': list(self.experience_buffer)[-1000:] if self.experience_buffer else []
+            'recent_experiences': list(self.experience_buffer)[-1000:] if self.experience_buffer else [],
+            # Save target network
+            'target_network_state': self.target_network.state_dict()
         }
-
-        if self.use_improved_selfplay:
-            # Save both networks for improved self-play
-            checkpoint['opponent_network_state'] = self.opponent_network.state_dict()
-            checkpoint['opponent_optimizer_state'] = self.opponent_optimizer.state_dict()
-        else:
-            # Save target network for normal self-play
-            checkpoint['target_network_state'] = self.target_network.state_dict()
 
         with open(filename, 'wb') as f:
             pickle.dump(checkpoint, f)
@@ -1281,8 +1345,10 @@ class RawNeuralCFR:
         if 'type' in checkpoint and checkpoint['type'] != 'raw_neural_cfr':
             print(f"Warning: Loading model with type '{checkpoint['type']}' as Raw Neural CFR")
 
-        # Check if model was trained with improved self-play
-        self.use_improved_selfplay = checkpoint.get('use_improved_selfplay', False)
+        # Check if model was trained with mixed training
+        self.use_mixed_training = checkpoint.get('use_mixed_training', False)
+        if self.use_mixed_training and 'mixed_training_weights' in checkpoint:
+            self.mixed_training_weights = checkpoint['mixed_training_weights']
 
         # Check if the model has a different hidden dimension
         if 'hidden_dim' in checkpoint and checkpoint['hidden_dim'] != self.hidden_dim:
@@ -1291,32 +1357,17 @@ class RawNeuralCFR:
             self.hidden_dim = checkpoint['hidden_dim']
             self.network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
             self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
-
-            if self.use_improved_selfplay:
-                self.opponent_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
-                self.opponent_optimizer = optim.Adam(self.opponent_network.parameters(), lr=self.learning_rate)
-            else:
-                self.target_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
+            self.target_network = RawNeuralCFRNetwork(hidden_dim=self.hidden_dim)
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
 
-        if self.use_improved_selfplay:
-            # Load opponent network for improved self-play
-            if 'opponent_network_state' in checkpoint:
-                self.opponent_network.load_state_dict(checkpoint['opponent_network_state'])
-                if 'opponent_optimizer_state' in checkpoint:
-                    self.opponent_optimizer.load_state_dict(checkpoint['opponent_optimizer_state'])
-            else:
-                print("Warning: No opponent network found in checkpoint, creating a copy of main network")
-                self.opponent_network.load_state_dict(self.network.state_dict())
+        # Load target network
+        if 'target_network_state' in checkpoint:
+            self.target_network.load_state_dict(checkpoint['target_network_state'])
         else:
-            # Load target network for normal self-play
-            if 'target_network_state' in checkpoint:
-                self.target_network.load_state_dict(checkpoint['target_network_state'])
-            else:
-                # If no target network saved, copy from main network
-                self.target_network.load_state_dict(self.network.state_dict())
+            # If no target network saved, copy from main network
+            self.target_network.load_state_dict(self.network.state_dict())
 
         self.regret_sum = defaultdict(lambda: np.zeros(8), checkpoint['regret_sum'])
         self.strategy_sum = defaultdict(lambda: np.zeros(8), checkpoint['strategy_sum'])
