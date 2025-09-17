@@ -355,7 +355,13 @@ class RawNeuralCFR:
             # Update exploration parameters
             progress = iteration / self.iterations
             self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
-            self.temperature = self.initial_temperature - (self.initial_temperature - self.final_temperature) * progress
+
+            # Exponential decay for temperature: T(t) = T_final + (T_init - T_final) * exp(-decay_rate * progress)
+            # We want temperature to decay from initial to final over the training duration
+            # Using decay_rate = 5 means we reach ~0.7% of the initial range at progress=1
+            decay_rate = 5.0
+            temp_range = self.initial_temperature - self.final_temperature
+            self.temperature = self.final_temperature + temp_range * math.exp(-decay_rate * progress)
 
             # Sample game trajectory with exploration
             trajectory = self._sample_game_trajectory()
@@ -766,7 +772,7 @@ class RawNeuralCFR:
 
             # Combined loss with balanced weights
             # Scale down to prevent large losses
-            loss = 0.1 * policy_loss + 0.5 * value_loss # + entropy_bonus
+            loss = 0.1 * policy_loss + 0.5 * value_loss# + entropy_bonus
 
 
             # Backward pass
@@ -1026,7 +1032,13 @@ class RawNeuralCFR:
             # Update exploration parameters based on total progress
             progress = iteration / self.iterations
             self.epsilon = self.initial_epsilon - (self.initial_epsilon - self.final_epsilon) * progress
-            self.temperature = self.initial_temperature - (self.initial_temperature - self.final_temperature) * progress
+
+            # Exponential decay for temperature: T(t) = T_final + (T_init - T_final) * exp(-decay_rate * progress)
+            # We want temperature to decay from initial to final over the training duration
+            # Using decay_rate = 5 means we reach ~0.7% of the initial range at progress=1
+            decay_rate = 5.0
+            temp_range = self.initial_temperature - self.final_temperature
+            self.temperature = self.final_temperature + temp_range * math.exp(-decay_rate * progress)
 
             # Sample game trajectory with exploration
             trajectory = self._sample_game_trajectory()
