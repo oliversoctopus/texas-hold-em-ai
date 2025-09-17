@@ -799,10 +799,13 @@ class RawNeuralCFR:
                         valid_actions.append(Action.ALL_IN)
 
                     # Create DQN state
+                    # Filter out None values from community cards
+                    community_cards_filtered = [c for c in game_state['community_cards'] if c is not None]
+
                     to_call = max(game_state['current_bets']) - game_state['current_bets'][1]
                     dqn_state = dqn_opponent.get_state_features(
                         hand=p2_cards,
-                        community_cards=game_state['community_cards'],
+                        community_cards=community_cards_filtered,
                         pot=game_state['pot'],
                         current_bet=max(game_state['current_bets']),
                         player_chips=game_state['stacks'][1],
