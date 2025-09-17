@@ -157,14 +157,14 @@ class RawNeuralCFRNetwork(nn.Module):
         )
 
     def _init_weights(self):
-        """Initialize weights to prevent folding bias"""
+        """Initialize weights to prevent extreme bias"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
-                # Use Xavier initialization
-                nn.init.xavier_uniform_(module.weight)
+                # Use Xavier initialization with gain for ReLU
+                nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
                 if module.bias is not None:
-                    # Initialize bias to zero (no action preference)
-                    nn.init.constant_(module.bias, 0)
+                    # Small random bias to break symmetry but not create strong preferences
+                    nn.init.normal_(module.bias, mean=0, std=0.01)
 
     def forward(self, game_state: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the network"""
@@ -262,8 +262,10 @@ class RawNeuralCFRNetwork(nn.Module):
         features.extend(stage_onehot)
 
         # Stack to pot ratio (SPR) - important for decision making
+        # Use effective stack (minimum of both stacks) for SPR
+        effective_stack = min(stacks[0], stacks[1]) if len(stacks) >= 2 else stacks[0]
         if pot > 0:
-            spr = stacks[0] / pot if stacks[0] > 0 else 0
+            spr = effective_stack / pot if effective_stack > 0 else 0
         else:
             spr = 10.0  # High SPR when pot is 0
         features.append(min(spr / 10.0, 1.0))  # Cap at 1.0
@@ -332,7 +334,7 @@ class RawNeuralCFR:
         # Target network for self-play
         self.target_network = RawNeuralCFRNetwork(hidden_dim=hidden_dim)
         self.target_network.load_state_dict(self.network.state_dict())
-        self.update_target_every = 500
+        self.update_target_every = 50  # Update more frequently for stability
 
         # Load DQN opponents for mixed training
         self.dqn_opponents = []
@@ -356,6 +358,9 @@ class RawNeuralCFR:
             'epsilon': [],
             'temperature': []
         }
+
+        # Store last bet action for bet sizing
+        self._last_bet_action = CFRAction.BET_POT.value  # Default to pot-sized bet
 
     def _load_dqn_opponents(self):
         """Load DQN benchmark models as opponents"""
@@ -1017,21 +1022,31 @@ class RawNeuralCFR:
         return new_state
 
     def _get_bet_size(self, action: int, game_state: Dict) -> int:
-        """Get bet size based on action"""
+        """Get bet size based on action with stack awareness"""
         pot = game_state['pot']
+        player = game_state['current_player']
+        player_stack = game_state['stacks'][player]
+        opponent_stack = game_state['stacks'][1 - player]
 
+        # Calculate effective stack (can't bet more than opponent has)
+        effective_stack = min(player_stack, opponent_stack)
+
+        # Get base bet size based on action
         if action == CFRAction.BET_SMALL.value:
-            return int(pot * 0.33)
+            base_bet = int(pot * 0.33)
         elif action == CFRAction.BET_MEDIUM.value:
-            return int(pot * 0.5)
+            base_bet = int(pot * 0.5)
         elif action == CFRAction.BET_LARGE.value:
-            return int(pot * 0.75)
+            base_bet = int(pot * 0.75)
         elif action == CFRAction.BET_POT.value:
-            return pot
+            base_bet = pot
         elif action == CFRAction.ALL_IN.value:
-            return game_state['stacks'][game_state['current_player']]
+            return player_stack  # All-in uses player's full stack
+        else:
+            return 0
 
-        return 0
+        # Cap bet at effective stack
+        return min(base_bet, effective_stack)
 
     def _get_legal_actions(self, game_state: Dict) -> List[int]:
         """Get legal actions for current game state"""
@@ -1122,14 +1137,15 @@ class RawNeuralCFR:
             # Forward pass
             strategy, value = self.network(game_state)
 
-            # Calculate advantage using value network's prediction (detached to prevent manipulation)
+            # Calculate advantage using TARGET network's prediction for stability
             with torch.no_grad():
-                # Use the current network's value prediction as baseline
-                baseline = value.item()
+                # Use target network for baseline to prevent instability
+                _, target_value = self.target_network(game_state)
+                baseline = target_value.item()
                 # Both utility and baseline are in BB units
                 advantage = utility - baseline
-                # Clip advantage for stability (in BB units)
-                advantage = np.clip(advantage, -10, 10)  # ±10 BB is a reasonable range
+                # Less aggressive clipping for better gradient flow
+                advantage = np.clip(advantage, -50, 50)  # Increased range for better learning
 
             # Policy gradient loss (REINFORCE with baseline)
             log_probs = F.log_softmax(strategy, dim=0)
@@ -1149,8 +1165,8 @@ class RawNeuralCFR:
             #entropy_bonus = -0.01 * entropy  # Negative because we want to maximize entropy
 
             # Combined loss with balanced weights
-            # Scale down to prevent large losses
-            loss = 0.1 * policy_loss + 0.5 * value_loss# + entropy_bonus
+            # Increased policy weight for stronger learning signal
+            loss = 0.5 * policy_loss + 0.5 * value_loss# + entropy_bonus
 
 
             # Backward pass
@@ -1172,7 +1188,7 @@ class RawNeuralCFR:
         to_call = kwargs.get('to_call', 0)
         pot_size = kwargs.get('pot_size', 0)
         stack_size = kwargs.get('stack_size', 1000)
-        opponent_stack = kwargs.get('opponent_stack', 1000)  # Get actual opponent stack
+        opponent_stack = kwargs.get('opponent_stack', stack_size)  # Default to player's stack if not provided
         position = kwargs.get('position', 0)
         num_players = kwargs.get('num_players', 2)
 
@@ -1203,17 +1219,30 @@ class RawNeuralCFR:
             # If no valid actions specified, assume all are legal (backward compatibility)
             legal_actions_mask = [1] * 8
 
+        # Determine game stage more accurately
+        community_cards = kwargs.get('community_cards', [])
+        if len(community_cards) == 0:
+            stage = 0  # Preflop
+        elif len(community_cards) == 3:
+            stage = 1  # Flop
+        elif len(community_cards) == 4:
+            stage = 2  # Turn
+        elif len(community_cards) >= 5:
+            stage = 3  # River
+        else:
+            stage = 0  # Default to preflop
+
         # Create game state from kwargs
         game_state = {
             'hole_cards': kwargs.get('hole_cards', []),
-            'community_cards': kwargs.get('community_cards', []),
+            'community_cards': community_cards,
             'pot': pot_size,
             'stacks': [stack_size, opponent_stack],  # Use actual opponent stack
             'current_player': 0,
             'button': position % num_players,  # Button position
             'current_bets': [my_current_bet, opponent_current_bet],
             'active_players': [True, True],
-            'stage': len(kwargs.get('community_cards', [])) // 2,
+            'stage': stage,  # Use calculated stage
             'action_history': kwargs.get('action_history', []),
             'legal_actions': legal_actions_mask,  # Use actual legal actions
             'to_call': to_call,  # Add this for feature extraction
@@ -1248,8 +1277,8 @@ class RawNeuralCFR:
         else:
             valid_indices = list(range(8))  # All actions if not specified
 
-        # Use average strategy if available
-        if state_key in self.strategy_sum and self.strategy_sum[state_key].sum() > 0:
+        # Use average strategy if available and we've trained enough
+        if state_key in self.strategy_sum and self.strategy_sum[state_key].sum() > 1.0:  # Need meaningful accumulation
             strategy = self.strategy_sum[state_key] / self.strategy_sum[state_key].sum()
 
             # Filter strategy to only valid actions
@@ -1300,8 +1329,14 @@ class RawNeuralCFR:
             selected_action = Action.CHECK
         elif action_idx == CFRAction.CALL.value:
             selected_action = Action.CALL
+        elif action_idx == CFRAction.ALL_IN.value:
+            selected_action = Action.ALL_IN
         else:
+            # For bet actions, we use RAISE but store the bet size info
+            # The game engine will interpret this as the appropriate raise amount
             selected_action = Action.RAISE
+            # Store bet sizing information for potential future use
+            self._last_bet_action = action_idx
 
         # Final validation: ensure selected action is in valid_actions
         if valid_actions and selected_action not in valid_actions:
@@ -1309,6 +1344,34 @@ class RawNeuralCFR:
             return valid_actions[0] if valid_actions else Action.FOLD
 
         return selected_action
+
+    def get_bet_amount(self, pot_size: int, stack_size: int, opponent_stack: int) -> int:
+        """Get the actual bet amount based on the last bet action chosen
+
+        This method should be called by the game engine after get_action returns RAISE
+        to determine the actual raise amount based on the specific bet size action chosen.
+        """
+        if not hasattr(self, '_last_bet_action'):
+            # Default to pot-sized bet if no action stored
+            return pot_size
+
+        action = self._last_bet_action
+        effective_stack = min(stack_size, opponent_stack)
+
+        if action == CFRAction.BET_SMALL.value:
+            bet_amount = int(pot_size * 0.33)
+        elif action == CFRAction.BET_MEDIUM.value:
+            bet_amount = int(pot_size * 0.5)
+        elif action == CFRAction.BET_LARGE.value:
+            bet_amount = int(pot_size * 0.75)
+        elif action == CFRAction.BET_POT.value:
+            bet_amount = pot_size
+        else:
+            # Default to pot-sized bet
+            bet_amount = pot_size
+
+        # Cap at effective stack
+        return min(bet_amount, effective_stack)
 
     def save(self, filename: str):
         """Save the model"""
