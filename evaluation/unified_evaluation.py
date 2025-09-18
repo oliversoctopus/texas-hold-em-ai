@@ -11,6 +11,10 @@ from core.game_engine import TexasHoldEm
 from core.player import Player
 from core.game_constants import Action
 from dqn.poker_ai import PokerAI
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from reward_nn.reward_based_ai import RewardBasedAI
 
 
 class UnifiedEvaluator:
@@ -519,3 +523,108 @@ def evaluate_deep_cfr_full(deep_cfr_ai: Any, num_games: int = 100,
     # Deep CFR uses the same evaluation as regular CFR
     return evaluator.evaluate_cfr_model(deep_cfr_ai, num_games, num_players,
                                         use_random_opponents, verbose)
+
+
+def evaluate_reward_based_ai(ai_model: 'RewardBasedAI', num_games: int = 100,
+                            num_players: int = 2, use_random_opponents: bool = True,
+                            verbose: bool = True) -> Dict:
+    """Evaluate Reward-Based AI model with BB/hand tracking"""
+    import random
+    evaluator = UnifiedEvaluator()
+
+    if verbose:
+        print(f"Evaluating Reward-Based AI over {num_games} games...")
+        print(f"  Players per game: {num_players}")
+        print(f"  Opponents: {'Random' if use_random_opponents else 'Strong AI'}")
+
+    # Track statistics
+    wins = 0
+    total_bb_won = 0
+    action_distribution = {'FOLD': 0, 'CHECK': 0, 'CALL': 0, 'RAISE': 0, 'ALL_IN': 0}
+    total_actions = 0
+    games_survived = 0
+
+    for game_num in range(num_games):
+        if verbose and (game_num + 1) % 20 == 0:
+            print(f"  Progress: {game_num + 1}/{num_games}")
+
+        # Setup game
+        starting_chips = 1000
+        big_blind = 20
+        test_position = game_num % num_players
+
+        game = TexasHoldEm(num_players=num_players, starting_chips=starting_chips, verbose=False)
+
+        # Create players
+        players = []
+        for i in range(num_players):
+            if i == test_position:
+                # Our test model
+                player = Player("RewardAI_Test", starting_chips, is_ai=True)
+                player.ai_model = ai_model
+                players.append(player)
+            else:
+                # Opponent
+                if use_random_opponents or not evaluator.benchmark_models:
+                    player = Player(f"Random_{i}", starting_chips, is_ai=True)
+                    player.ai_model = evaluator._create_random_ai()
+                else:
+                    opponent_model = random.choice(evaluator.benchmark_models)
+                    player = Player(f"Strong_AI_{i}", starting_chips, is_ai=True)
+                    player.ai_model = opponent_model
+                players.append(player)
+
+        game.players = players
+
+        # Play game and track results
+        test_start_chips = players[test_position].chips
+        winner_idx, game_actions = evaluator._play_single_game_with_tracking(game, test_position)
+
+        # Update action distribution
+        for action in game_actions:
+            if action in action_distribution:
+                action_distribution[action] += 1
+                total_actions += 1
+
+        # Calculate BB won/lost
+        final_chips = players[test_position].chips
+        chips_change = final_chips - test_start_chips
+        bb_won = chips_change / big_blind
+        total_bb_won += bb_won
+
+        if final_chips > 0:
+            games_survived += 1
+
+        if winner_idx == test_position:
+            wins += 1
+
+    # Calculate statistics
+    win_rate = (wins / num_games) * 100 if num_games > 0 else 0
+    avg_bb_per_hand = total_bb_won / num_games if num_games > 0 else 0
+    survival_rate = (games_survived / num_games) * 100 if num_games > 0 else 0
+
+    # Calculate action distribution percentages
+    action_distribution_pct = {}
+    if total_actions > 0:
+        for action, count in action_distribution.items():
+            action_distribution_pct[action] = (count / total_actions) * 100
+
+    results = {
+        'win_rate': win_rate,
+        'bb_per_hand': avg_bb_per_hand,
+        'survival_rate': survival_rate,
+        'games_played': num_games,
+        'action_distribution': action_distribution_pct,
+        'total_bb_won': total_bb_won
+    }
+
+    if verbose:
+        print(f"\nReward-Based AI Evaluation Results:")
+        print(f"  Win Rate: {win_rate:.1f}%")
+        print(f"  Avg BB/hand: {avg_bb_per_hand:+.3f}")
+        print(f"  Survival Rate: {survival_rate:.1f}%")
+        print(f"  Action Distribution:")
+        for action, pct in action_distribution_pct.items():
+            print(f"    {action}: {pct:.1f}%")
+
+    return results

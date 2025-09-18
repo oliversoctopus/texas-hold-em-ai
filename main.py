@@ -14,10 +14,11 @@ def main():
     print("2. Train BASIC 2-Player CFR (Original Neural CFR)")
     print("3. Train RAW NEURAL 2-Player CFR (End-to-End Learning)")
     print("4. Train Deep CFR (neural network enhanced for 3+ players)")
-    print("5. Load existing AI")
-    print("6. Play without AI")
+    print("5. Train Reward-Based Neural Network AI (PPO with BB rewards)")
+    print("6. Load existing AI")
+    print("7. Play without AI")
 
-    choice = input("\nChoose option (1-6): ")
+    choice = input("\nChoose option (1-7): ")
     
     ai_model = None
     
@@ -408,8 +409,179 @@ def main():
                 return self.cfr_player.get_raise_size(game_state)
         
         ai_model = DeepCFRWrapper(cfr_player)
-            
+
     elif choice == '5':
+        print("\nReward-Based Neural Network AI Training")
+        print("Uses per-hand rewards measured in big blinds to learn optimal play")
+        print("Features: Actor-Critic architecture, PPO optimization, self-attention")
+        print("-" * 60)
+
+        # Training configuration
+        print("\nSelect training configuration:")
+        print("1. Quick (1,000 hands - ~5 minutes)")
+        print("2. Standard (5,000 hands - ~25 minutes)")
+        print("3. Professional (10,000 hands - ~50 minutes)")
+        print("4. Custom")
+
+        config_choice = input("Choose configuration (1-4, default: 2): ") or "2"
+
+        if config_choice == '1':
+            num_hands = 1000
+            config_name = "Quick"
+        elif config_choice == '2':
+            num_hands = 5000
+            config_name = "Standard"
+        elif config_choice == '3':
+            num_hands = 10000
+            config_name = "Professional"
+        else:
+            num_hands = int(input("Number of hands to train: ") or "5000")
+            config_name = "Custom"
+
+        # Model configuration
+        print("\nSelect model size:")
+        print("1. Small (256 hidden units - faster training)")
+        print("2. Standard (512 hidden units - better performance)")
+        print("3. Large (768 hidden units - best performance)")
+
+        size_choice = input("Choose model size (1-3, default: 1): ") or "1"
+
+        if size_choice == '1':
+            hidden_dim = 256
+            size_name = "Small"
+        elif size_choice == '2':
+            hidden_dim = 512
+            size_name = "Standard"
+        else:
+            hidden_dim = 768
+            size_name = "Large"
+
+        # Number of players
+        num_players = int(input("Number of players for training (2-6, default: 2): ") or "2")
+
+        # Advanced settings
+        learning_rate = 3e-4
+        batch_size = 32
+        update_every = 10
+
+        advanced = input("\nConfigure advanced settings? (y/n): ")
+        if advanced.lower() == 'y':
+            lr = input(f"Learning rate (default: {learning_rate}): ")
+            if lr:
+                learning_rate = float(lr)
+            bs = input(f"Batch size (default: {batch_size}): ")
+            if bs:
+                batch_size = int(bs)
+            ue = input(f"Update every N hands (default: {update_every}): ")
+            if ue:
+                update_every = int(ue)
+
+        print(f"\nTraining Reward-Based AI ({config_name} - {num_hands:,} hands)...")
+        print(f"Model: {size_name} ({hidden_dim} hidden units)")
+        print(f"Players: {num_players}")
+        print(f"Learning rate: {learning_rate}, Batch size: {batch_size}")
+        print("Starting training...\n")
+
+        # Create and train the model
+        from reward_nn.reward_based_ai import RewardBasedAI
+        from reward_nn.training import RewardBasedTrainer
+
+        reward_ai = RewardBasedAI(
+            learning_rate=learning_rate,
+            hidden_dim=hidden_dim
+        )
+
+        trainer = RewardBasedTrainer(
+            reward_ai,
+            num_players=num_players
+        )
+
+        trainer.train(
+            num_hands=num_hands,
+            batch_size=batch_size,
+            update_every=update_every,
+            verbose=True
+        )
+
+        # Evaluate the model
+        eval_choice = input("\nEvaluate Reward-Based AI? (y/n): ")
+        if eval_choice.lower() == 'y':
+            num_games = int(input("Number of games per opponent type (default: 100): ") or "100")
+
+            print("\nTesting vs random opponents (baseline)...")
+            from evaluation.unified_evaluation import evaluate_reward_based_ai
+            random_results = evaluate_reward_based_ai(
+                reward_ai, num_games=num_games, num_players=num_players,
+                use_random_opponents=True, verbose=True
+            )
+
+            print("\nTesting vs DQN benchmark models (challenge)...")
+            dqn_results = evaluate_reward_based_ai(
+                reward_ai, num_games=num_games, num_players=num_players,
+                use_random_opponents=False, verbose=True
+            )
+
+            print(f"\n[SUMMARY] Reward-Based AI Evaluation:")
+            print(f"  vs Random opponents: {random_results['win_rate']:.1f}%")
+            print(f"  vs DQN benchmarks: {dqn_results['win_rate']:.1f}%")
+            print(f"  Avg BB/hand vs Random: {random_results['bb_per_hand']:+.3f}")
+            print(f"  Avg BB/hand vs DQN: {dqn_results['bb_per_hand']:+.3f}")
+
+        # Save model
+        save_choice = input("\nSave trained model? (y/n): ")
+        if save_choice.lower() == 'y':
+            model_name = f"reward_ai_{config_name.lower()}_{hidden_dim}d.pth"
+            filename = input(f"Filename (default: models/{model_name}): ") or f"models/{model_name}"
+
+            # Ensure directory exists
+            import os
+            dirname = os.path.dirname(filename)
+            if dirname and not os.path.exists(dirname):
+                os.makedirs(dirname)
+
+            reward_ai.save(filename)
+            print(f"Model saved to {filename}")
+
+        # Create wrapper for gameplay
+        print("\nCreating game wrapper for Reward-Based AI...")
+
+        class RewardBasedGameWrapper:
+            def __init__(self, reward_ai):
+                self.reward_ai = reward_ai
+                self.epsilon = 0  # No exploration during play
+
+            def choose_action(self, state, valid_actions, **kwargs):
+                # Convert state to format expected by reward AI
+                game_state = {
+                    'hole_cards': getattr(state, 'hole_cards', []),
+                    'community_cards': getattr(state, 'community_cards', []),
+                    'pot_size': getattr(state, 'pot_size', 0),
+                    'to_call': getattr(state, 'to_call', 0),
+                    'stack_size': getattr(state, 'stack_size', 1000),
+                    'position': getattr(state, 'position', 0),
+                    'num_players': getattr(state, 'num_players', num_players),
+                    'players_in_hand': getattr(state, 'players_in_hand', num_players),
+                    'action_history': getattr(state, 'action_history', []),
+                    'hand_phase': getattr(state, 'hand_phase', 0),
+                    'big_blind': 20,
+                    'is_preflop_aggressor': 0
+                }
+                return self.reward_ai.choose_action(game_state, valid_actions, training=False)
+
+            def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000,
+                             player_current_bet=0, min_raise=20):
+                return self.reward_ai.get_raise_size(
+                    state, pot, current_bet, player_chips,
+                    player_current_bet, min_raise
+                )
+
+            def get_state_features(self, *args, **kwargs):
+                return self.reward_ai.get_state_features(*args, **kwargs)
+
+        ai_model = RewardBasedGameWrapper(reward_ai)
+        print("Reward-Based AI ready for gameplay!")
+
+    elif choice == '6':
         filename = input("Model filename (.pth for DQN/Deep CFR, .pkl for CFR, default: poker_ai.pth): ") or "poker_ai.pth"
 
         # Check if it's a CFR model (.pkl) or DQN model (.pth)
@@ -682,7 +854,7 @@ def main():
                 print("Starting with untrained AI")
                 ai_model = None
     
-    elif choice == '6':
+    elif choice == '7':
         print("Playing without AI training")
         ai_model = None
 
