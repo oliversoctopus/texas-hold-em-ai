@@ -325,13 +325,21 @@ class RewardBasedTrainer:
             amount = min(game.current_bet - player.current_bet, player.chips)
             game.pot += player.bet(amount)
         elif action == Action.RAISE:
-            # Determine raise size
-            raise_size = player.ai_model.get_raise_size(
+            # Calculate how much we need to call first
+            call_amount = game.current_bet - player.current_bet
+
+            # Get the raise amount from AI (this returns the raise amount, not total)
+            raise_amount = player.ai_model.get_raise_size(
                 None, game.pot, game.current_bet, player.chips,
                 player.current_bet, self.big_blind
             )
-            raise_amount = min(raise_size, player.chips)
-            game.pot += player.bet(raise_amount)
+
+            # Total amount to bet is call + raise
+            total_bet = min(call_amount + raise_amount, player.chips)
+
+            # Execute the bet
+            actual_bet = player.bet(total_bet)
+            game.pot += actual_bet
             game.current_bet = player.current_bet
         elif action == Action.ALL_IN:
             game.pot += player.bet(player.chips)
