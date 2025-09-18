@@ -174,6 +174,7 @@ class RewardBasedTrainer:
         game.current_bet = self.big_blind
 
         initial_chips = game.players[0].chips
+        # Debug output removed
 
         # Play through streets
         streets = ['preflop', 'flop', 'turn', 'river']
@@ -196,10 +197,12 @@ class RewardBasedTrainer:
         winners = self.determine_winners(game)
         our_player = game.players[0]
 
+
         # Calculate reward in big blinds
         final_chips = our_player.chips
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
+
 
         # Store experience with reward
         if hasattr(our_player.ai_model, 'remember'):
@@ -358,6 +361,10 @@ class RewardBasedTrainer:
         active_players = [p for p in game.players if not p.folded]
 
         if len(active_players) == 1:
+            # Single winner gets the entire pot
+            winner = active_players[0]
+            winner.chips += game.pot
+            game.pot = 0
             return active_players
 
         # Evaluate hands
@@ -369,6 +376,16 @@ class RewardBasedTrainer:
                 player_hands.append((player, hand_value))
 
         if not player_hands:
+            # If no valid hands, split pot equally among active players
+            if active_players and game.pot > 0:
+                split_pot = game.pot // len(active_players)
+                remainder = game.pot % len(active_players)
+                for i, player in enumerate(active_players):
+                    if i < remainder:
+                        player.chips += split_pot + 1
+                    else:
+                        player.chips += split_pot
+                game.pot = 0
             return active_players
 
         # Find best hand
@@ -387,6 +404,9 @@ class RewardBasedTrainer:
                     winner.chips += split_pot + 1
                 else:
                     winner.chips += split_pot
+
+            # Clear the pot after distribution
+            game.pot = 0
 
         return winners
 
