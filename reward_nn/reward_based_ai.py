@@ -418,17 +418,26 @@ class RewardBasedAI:
 
     def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000,
                       player_current_bet=0, min_raise=20):
-        """Determine raise size based on learned policy"""
-        # Use pot-sized betting by default
-        pot_size_bet = pot + current_bet
+        """Determine raise size (uses fixed heuristic, not learned)"""
+        # NOTE: This is a heuristic, not learned by the neural network
+        # The network only chooses whether to raise, not the size
 
-        # Ensure minimum raise
-        raise_amount = max(min_raise, pot_size_bet * 0.66)
+        # Calculate pot after calling
+        call_amount = current_bet - player_current_bet
+        pot_after_call = pot + call_amount
 
-        # Cap at player's stack
-        max_raise = player_chips
+        # Use 2/3 pot as raise size (common in poker)
+        # Round to nearest integer to avoid fractional chips
+        desired_raise = int(round(pot_after_call * 0.66))
 
-        return min(raise_amount, max_raise)
+        # Ensure minimum raise requirement
+        actual_raise = max(min_raise, desired_raise)
+
+        # Cap at what we can afford after calling
+        max_raise_amount = player_chips - call_amount
+
+        # Return integer amount to avoid fractional chips
+        return min(actual_raise, max_raise_amount)
 
     def save(self, filepath: str):
         """Save model to file"""

@@ -168,8 +168,9 @@ class RewardBasedTrainer:
         # Post blinds
         sb_pos = (game.dealer_position + 1) % self.num_players
         bb_pos = (game.dealer_position + 2) % self.num_players
-        game.pot += game.players[sb_pos].bet(self.big_blind // 2)
-        game.pot += game.players[bb_pos].bet(self.big_blind)
+        sb_bet = game.players[sb_pos].bet(self.big_blind // 2)
+        bb_bet = game.players[bb_pos].bet(self.big_blind)
+        game.pot = sb_bet + bb_bet  # Start with clean integer pot
         game.current_bet = self.big_blind
 
         initial_chips = game.players[0].chips
@@ -323,7 +324,9 @@ class RewardBasedTrainer:
             pass  # No action needed
         elif action == Action.CALL:
             amount = min(game.current_bet - player.current_bet, player.chips)
-            game.pot += player.bet(amount)
+            actual_bet = player.bet(amount)
+            game.pot += actual_bet
+            game.pot = int(round(game.pot))  # Ensure pot stays integer
         elif action == Action.RAISE:
             # Calculate how much we need to call first
             call_amount = game.current_bet - player.current_bet
@@ -340,9 +343,12 @@ class RewardBasedTrainer:
             # Execute the bet
             actual_bet = player.bet(total_bet)
             game.pot += actual_bet
+            game.pot = int(round(game.pot))  # Ensure pot stays integer
             game.current_bet = player.current_bet
         elif action == Action.ALL_IN:
-            game.pot += player.bet(player.chips)
+            actual_bet = player.bet(player.chips)
+            game.pot += actual_bet
+            game.pot = int(round(game.pot))  # Ensure pot stays integer
             if player.current_bet > game.current_bet:
                 game.current_bet = player.current_bet
             player.all_in = True
@@ -371,9 +377,16 @@ class RewardBasedTrainer:
 
         # Distribute pot
         if winners:
+            # Use integer division to avoid fractional chips
             split_pot = game.pot // len(winners)
-            for winner in winners:
-                winner.chips += split_pot
+            remainder = game.pot % len(winners)
+
+            for i, winner in enumerate(winners):
+                # Give the remainder chips to first winners
+                if i < remainder:
+                    winner.chips += split_pot + 1
+                else:
+                    winner.chips += split_pot
 
         return winners
 
