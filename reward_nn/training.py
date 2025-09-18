@@ -203,6 +203,8 @@ class RewardBasedTrainer:
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
 
+        won = our_player in winners
+
 
         # Store experience with reward
         if hasattr(our_player.ai_model, 'remember'):
@@ -277,10 +279,6 @@ class RewardBasedTrainer:
 
                 # Intermediate reward (small shaping rewards)
                 intermediate_reward = 0
-                if action == Action.FOLD and player.total_invested < self.big_blind * 2:
-                    intermediate_reward = -0.1  # Small penalty for early fold
-                elif action in [Action.RAISE, Action.ALL_IN] and player.current_bet > old_bet:
-                    intermediate_reward = 0.05  # Small bonus for aggression
 
                 player.ai_model.remember(state, action, intermediate_reward, next_state, False)
 
