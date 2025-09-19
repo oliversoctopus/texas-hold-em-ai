@@ -656,7 +656,36 @@ def main():
                 checkpoint = torch.load(filename, map_location='cpu')
                 model_type = checkpoint.get('model_type', 'Unknown')
 
-                if model_type == 'DeepCFR':
+                if model_type == 'RewardBasedAI':
+                    print(f"Loading Reward-Based AI model: {filename}")
+                    # Load Reward-Based AI model
+                    from reward_nn.reward_based_ai import RewardBasedAI
+                    ai_model = RewardBasedAI()
+                    ai_model.load(filename)
+                    print(f"Reward-Based AI model loaded successfully!")
+                    print(f"  Model version: {checkpoint.get('model_version', '1.0')}")
+                    print(f"  Training steps: {ai_model.training_step:,}")
+
+                    # Option to evaluate
+                    eval_choice = input("\nEvaluate Reward-Based AI? (y/n): ")
+                    if eval_choice.lower() == 'y':
+                        num_games = int(input("Number of games (default: 100): ") or "100")
+
+                        # Ask user to choose evaluation opponents
+                        print("\nChoose evaluation opponents:")
+                        print("1. Random opponents (fast, baseline)")
+                        print("2. DQN benchmark models (more challenging)")
+                        opponent_choice = input("Choice (1-2, default: 1): ") or "1"
+
+                        from evaluation.unified_evaluation import evaluate_reward_based_ai
+                        if opponent_choice == '2':
+                            print("Testing vs DQN benchmark models...")
+                            evaluate_reward_based_ai(ai_model, num_games=num_games, use_random_opponents=False, verbose=True)
+                        else:
+                            print("Testing vs random opponents...")
+                            evaluate_reward_based_ai(ai_model, num_games=num_games, use_random_opponents=True, verbose=True)
+
+                elif model_type == 'DeepCFR':
                     print(f"Loading Deep CFR model: {filename}")
                     # Load Deep CFR model
                     from deepcfr.deep_cfr import DeepCFRPokerAI

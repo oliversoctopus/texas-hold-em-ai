@@ -16,6 +16,22 @@ def detect_model_type(filename: str) -> Dict[str, Any]:
     Returns:
         Dictionary with model information including type and version
     """
+    import torch
+
+    # First check if it's a PyTorch model (RewardBasedAI uses .pth files)
+    if filename.endswith('.pth'):
+        try:
+            data = torch.load(filename, map_location='cpu')
+            if isinstance(data, dict) and 'model_type' in data:
+                return {
+                    'model_type': data['model_type'],
+                    'model_version': data.get('model_version', '1.0'),
+                    'has_flag': True,
+                    'data': data
+                }
+        except:
+            pass  # Not a valid PyTorch model, try pickle
+
     try:
         with open(filename, 'rb') as f:
             data = pickle.load(f)
@@ -147,6 +163,12 @@ def load_cfr_model_by_type(filename: str, verbose: bool = True):
     elif model_type == 'raw_neural_cfr':
         from cfr.raw_neural_cfr import RawNeuralCFR
         model = RawNeuralCFR()
+        model.load(filename)
+        return model, model_info
+
+    elif model_type == 'RewardBasedAI':
+        from reward_nn.reward_based_ai import RewardBasedAI
+        model = RewardBasedAI()
         model.load(filename)
         return model, model_info
 
@@ -465,6 +487,10 @@ def create_game_wrapper_for_model(model, model_info: Dict[str, Any]):
 
         return CFRWrapper(cfr_player)
 
+    elif model_type == 'RewardBasedAI':
+        # RewardBasedAI already has the right interface
+        return model
+
     else:
         raise ValueError(f"Cannot create wrapper for unknown model type: {model_type}")
 
@@ -528,6 +554,16 @@ def evaluate_model_by_type(model, model_info: Dict[str, Any], num_games: int = 1
             num_games=num_games,
             num_players=2,
             use_random_opponents=use_random,
+            verbose=verbose
+        )
+
+    elif model_type == 'RewardBasedAI':
+        from evaluation.unified_evaluation import evaluate_reward_based_ai
+        # Default to testing vs random opponents
+        return evaluate_reward_based_ai(
+            model,
+            num_games=num_games,
+            use_random_opponents=not use_strong_opponents,
             verbose=verbose
         )
 

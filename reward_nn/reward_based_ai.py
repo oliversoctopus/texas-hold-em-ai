@@ -309,8 +309,13 @@ class RewardBasedAI:
                 # Store for training
                 self.last_action_probs = action_probs.cpu().numpy()
             else:
-                # Use most likely action during evaluation
-                action_idx = action_probs.argmax().item()
+                # During evaluation, use stochastic policy with temperature
+                # to balance exploration and exploitation
+                temperature = 0.75  # Slightly reduce randomness
+                scaled_logits = masked_logits / temperature
+                scaled_probs = F.softmax(scaled_logits, dim=-1)
+                action_dist = torch.distributions.Categorical(scaled_probs)
+                action_idx = action_dist.sample().item()
 
         # Map to Action enum
         return Action(action_idx)

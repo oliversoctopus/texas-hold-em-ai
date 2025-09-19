@@ -38,6 +38,11 @@ class RewardBasedTrainer:
         self.opponent_models = []
         self._load_opponent_models()
 
+        # Snapshot pool for preventing overfitting
+        self.opponent_snapshots = []
+        self.snapshot_interval = 200  # Save snapshot every 200 hands
+        self.max_snapshots = 5  # Keep only recent snapshots to save memory
+
     def _load_opponent_models(self):
         """Load existing models as opponents for diversity"""
         # Try to load some DQN models if available
@@ -55,7 +60,7 @@ class RewardBasedTrainer:
                     model.load(path)
                     model.epsilon = 0
                     self.opponent_models.append(('DQN', model))
-                    break  # Just load one for now
+                    #break  # Just load one for now
             except:
                 pass
 
@@ -71,10 +76,18 @@ class RewardBasedTrainer:
         wins = 0
         total_bb_won = 0
         hands_per_update = []
+        total_all_ins = 0  # Track all-in frequency
 
         for hand_idx in range(num_hands):
+            # Track all-ins for this hand
+            self._current_training_all_ins = 0
+
             # Play a hand and collect experiences
             hand_reward_bb, won = self.simulate_hand(hand_idx)
+
+            # Update total all-in tracking
+            if self._current_training_all_ins > 0:
+                total_all_ins += 1
 
             # Track statistics
             total_bb_won += hand_reward_bb
@@ -89,16 +102,22 @@ class RewardBasedTrainer:
                 self.ai_model.train_on_batch(batch_size=batch_size, epochs=4)
                 hands_per_update.append(hand_idx + 1)
 
+            # Save snapshot for opponent pool
+            if (hand_idx + 1) % self.snapshot_interval == 0:
+                self._save_snapshot()
+
             # Progress update
             if verbose and (hand_idx + 1) % 100 == 0:
                 win_rate = (wins / (hand_idx + 1)) * 100
                 avg_bb = total_bb_won / (hand_idx + 1)
+                all_in_rate = (total_all_ins / (hand_idx + 1)) * 100
                 elapsed = time.time() - start_time
                 hands_per_sec = (hand_idx + 1) / elapsed
 
                 print(f"Hands: {hand_idx + 1}/{num_hands} | "
                       f"Win Rate: {win_rate:.1f}% | "
                       f"Avg BB/hand: {avg_bb:+.2f} | "
+                      f"All-in: {all_in_rate:.1f}% | "
                       f"Speed: {hands_per_sec:.1f} hands/sec")
 
                 # Clear old experiences to prevent memory issues
@@ -132,6 +151,9 @@ class RewardBasedTrainer:
         """Simulate a single hand and return reward in big blinds"""
         game = TexasHoldEmTraining(num_players=self.num_players)
 
+        # Track all-ins for penalty
+        our_all_in_count = 0
+
         # Setup players first, before reset
         players = []
         for i in range(self.num_players):
@@ -146,13 +168,28 @@ class RewardBasedTrainer:
 
                 if opponent_type == 'self':
                     player.ai_model = self.ai_model
-                elif opponent_type == 'random':
-                    player.ai_model = self._create_random_ai()
+                elif opponent_type == 'random_passive':
+                    player.ai_model = self._create_random_ai(aggressive=False)
+                elif opponent_type == 'random_aggressive':
+                    player.ai_model = self._create_random_ai(aggressive=True)
+                elif opponent_type == 'tight_aggressive':
+                    player.ai_model = self._create_tight_aggressive_ai()
+                elif opponent_type == 'loose_passive':
+                    player.ai_model = self._create_loose_passive_ai()
+                elif opponent_type == 'calling_station':
+                    player.ai_model = self._create_calling_station_ai()
+                elif opponent_type == 'maniac':
+                    player.ai_model = self._create_maniac_ai()
+                elif opponent_type == 'all_in_bot':
+                    player.ai_model = self._create_all_in_bot()
+                elif opponent_type == 'snapshot' and hasattr(self, 'opponent_snapshots') and self.opponent_snapshots:
+                    snapshot_model = random.choice(self.opponent_snapshots)
+                    player.ai_model = snapshot_model
                 elif opponent_type == 'model' and self.opponent_models:
                     _, model = random.choice(self.opponent_models)
                     player.ai_model = model
                 else:
-                    player.ai_model = self._create_random_ai()
+                    player.ai_model = self._create_random_ai(aggressive=False)
 
             players.append(player)
 
@@ -186,7 +223,8 @@ class RewardBasedTrainer:
                 game.community_cards.append(game.deck.draw())
 
             # Betting round
-            self.betting_round(game, street_idx)
+            all_ins_this_round = self.betting_round(game, street_idx)
+            our_all_in_count += all_ins_this_round
 
             # Check if hand is over
             active = [p for p in game.players if not p.folded]
@@ -203,7 +241,18 @@ class RewardBasedTrainer:
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
 
+        # Apply penalty for excessive all-ins (encourages more strategic play)
+        if our_all_in_count > 0:
+            # Small penalty for going all-in, scaled by how early it was
+            # Early all-ins are penalized more than late all-ins
+            all_in_penalty = 0.5 * our_all_in_count  # -0.5 BB per all-in
+            reward_bb -= all_in_penalty
+
         won = our_player in winners
+
+        # Update tracking (add all-in count to parent method's tracking)
+        if hasattr(self, '_current_training_all_ins'):
+            self._current_training_all_ins += our_all_in_count
 
 
         # Store experience with reward
@@ -224,9 +273,11 @@ class RewardBasedTrainer:
         return reward_bb, won
 
     def betting_round(self, game: TexasHoldEmTraining, street_idx: int):
-        """Execute a betting round"""
+        """Execute a betting round, returns number of all-ins by our player"""
         if not game.players or len(game.players) == 0:
-            return
+            return 0
+
+        our_all_ins = 0  # Track our player's all-ins
 
         num_active_players = len(game.players)
         first_to_act = (game.dealer_position + 3) % num_active_players if street_idx == 0 \
@@ -262,11 +313,17 @@ class RewardBasedTrainer:
             valid_actions = self.get_valid_actions(game, player)
 
             # Choose action
-            action = player.ai_model.choose_action(state, valid_actions, training=True)
+            # Only the main training player (position 0) should be in training mode
+            is_training_player = (player == game.players[0])
+            action = player.ai_model.choose_action(state, valid_actions, training=is_training_player)
 
             # Execute action
             old_bet = player.current_bet
             self.execute_action(game, player, action)
+
+            # Track if our player went all-in
+            if player == game.players[0] and action == Action.ALL_IN:
+                our_all_ins += 1
 
             # Store experience
             if hasattr(player.ai_model, 'remember') and player == game.players[0]:
@@ -296,6 +353,8 @@ class RewardBasedTrainer:
                 break
 
             current = (current + 1) % num_active_players
+
+        return our_all_ins
 
     def get_valid_actions(self, game, player) -> List[Action]:
         """Get valid actions for a player"""
@@ -333,10 +392,25 @@ class RewardBasedTrainer:
             call_amount = game.current_bet - player.current_bet
 
             # Get the raise amount from AI (this returns the raise amount, not total)
-            raise_amount = player.ai_model.get_raise_size(
-                None, game.pot, game.current_bet, player.chips,
-                player.current_bet, self.big_blind
-            )
+            # For DQN models, we need to provide the state
+            if hasattr(player.ai_model, 'q_network'):
+                # DQN model needs state tensor
+                state = player.ai_model.get_state_features(
+                    player.hand, game.community_cards, game.pot, game.current_bet,
+                    player.chips, player.current_bet, self.num_players,
+                    sum(1 for p in game.players if not p.folded),
+                    0, game.action_history[-10:], [], hand_phase=0
+                )
+                raise_amount = player.ai_model.get_raise_size(
+                    state, game.pot, game.current_bet, player.chips,
+                    player.current_bet, self.big_blind
+                )
+            else:
+                # Other models don't need state for raise sizing
+                raise_amount = player.ai_model.get_raise_size(
+                    None, game.pot, game.current_bet, player.chips,
+                    player.current_bet, self.big_blind
+                )
 
             # Total amount to bet is call + raise
             total_bet = min(call_amount + raise_amount, player.chips)
@@ -410,13 +484,20 @@ class RewardBasedTrainer:
 
     def _choose_opponent(self, hand_idx: int) -> str:
         """Choose opponent type based on curriculum"""
-        # Start with more random, gradually increase self-play
+        # More balanced curriculum with capped self-play
         progress = min(1.0, hand_idx / 1000)
 
         weights = {
-            'random': 0.3 * (1 - progress) + 0.1,
-            'self': 0.5 + 0.3 * progress,
-            'model': 0.2 if self.opponent_models else 0
+            'random_passive': 0.08,
+            'random_aggressive': 0.08,
+            'tight_aggressive': 0.08,
+            'loose_passive': 0.08,
+            'calling_station': 0.05,
+            'maniac': 0.05,
+            'all_in_bot': 0.08,  # New: always goes all-in
+            'self': 0.15 + 0.15 * progress,  # Max 30% self-play
+            'snapshot': 0.1 * progress if hasattr(self, 'opponent_snapshots') and self.opponent_snapshots else 0,
+            'model': 0.1 if self.opponent_models else 0
         }
 
         # Normalize weights
@@ -432,41 +513,140 @@ class RewardBasedTrainer:
             if rand < cumulative:
                 return opponent_type
 
-        return 'random'
+        return 'random_passive'
 
-    def _create_random_ai(self):
-        """Create a random AI opponent"""
+    def _create_random_ai(self, aggressive=False):
+        """Create a random AI opponent with configurable play style"""
+        # Define weight profiles for different play styles
+        if aggressive:
+            action_weights = {
+                Action.FOLD: 0.05,
+                Action.CHECK: 0.1,
+                Action.CALL: 0.2,
+                Action.RAISE: 0.4,
+                Action.ALL_IN: 0.25
+            }
+            raise_range = (60, 150)  # Aggressive players bet bigger
+        else:
+            action_weights = {
+                Action.FOLD: 0.1,
+                Action.CHECK: 0.4,
+                Action.CALL: 0.3,
+                Action.RAISE: 0.15,
+                Action.ALL_IN: 0.05
+            }
+            raise_range = (40, 100)  # Passive players bet smaller
+
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _create_weighted_random_ai(self, action_weights, raise_range=(40, 100)):
+        """Create a random AI with specified action weights"""
         class RandomAI:
-            def __init__(self):
+            def __init__(self, action_weights, raise_range):
                 self.epsilon = 0
+                self.action_weights = action_weights
+                self.raise_range = raise_range
 
             def get_state_features(self, *args, **kwargs):
                 return {}
 
             def choose_action(self, state, valid_actions, **kwargs):
-                # Prefer passive play
+                # Build weights for valid actions
                 weights = []
                 for action in valid_actions:
-                    if action == Action.FOLD:
-                        weights.append(0.1)
-                    elif action == Action.CHECK:
-                        weights.append(0.4)
-                    elif action == Action.CALL:
-                        weights.append(0.3)
-                    elif action == Action.RAISE:
-                        weights.append(0.15)
-                    elif action == Action.ALL_IN:
-                        weights.append(0.05)
+                    weights.append(self.action_weights.get(action, 0.1))
 
                 # Normalize and sample
                 total = sum(weights)
-                weights = [w/total for w in weights]
-                return np.random.choice(valid_actions, p=weights)
+                if total > 0:
+                    weights = [w/total for w in weights]
+                    return np.random.choice(valid_actions, p=weights)
+                else:
+                    # Fallback to uniform random if weights are all 0
+                    return np.random.choice(valid_actions)
 
             def get_raise_size(self, *args, **kwargs):
-                return random.randint(40, 100)
+                return random.randint(*self.raise_range)
 
             def remember(self, *args, **kwargs):
                 pass
 
-        return RandomAI()
+        return RandomAI(action_weights, raise_range)
+
+    def _create_tight_aggressive_ai(self):
+        """Create a tight-aggressive AI (plays few hands but plays them aggressively)"""
+        action_weights = {
+            Action.FOLD: 0.35,   # Folds often (tight)
+            Action.CHECK: 0.05,  # Rarely checks
+            Action.CALL: 0.1,    # Rarely calls
+            Action.RAISE: 0.35,  # Raises frequently when playing
+            Action.ALL_IN: 0.15  # Occasional all-ins
+        }
+        raise_range = (80, 200)  # Bigger bets when playing
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _create_loose_passive_ai(self):
+        """Create a loose-passive AI (plays many hands but passively)"""
+        action_weights = {
+            Action.FOLD: 0.05,   # Rarely folds (loose)
+            Action.CHECK: 0.35,  # Checks often
+            Action.CALL: 0.45,   # Calls frequently (passive)
+            Action.RAISE: 0.1,   # Rarely raises
+            Action.ALL_IN: 0.05  # Very rarely goes all-in
+        }
+        raise_range = (30, 60)  # Small bets when raising
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _create_calling_station_ai(self):
+        """Create a calling station AI (calls almost everything)"""
+        action_weights = {
+            Action.FOLD: 0.02,   # Almost never folds
+            Action.CHECK: 0.2,   # Checks when possible
+            Action.CALL: 0.7,    # Calls most of the time
+            Action.RAISE: 0.06,  # Very rarely raises
+            Action.ALL_IN: 0.02  # Almost never all-in
+        }
+        raise_range = (20, 40)  # Minimal raises
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _create_maniac_ai(self):
+        """Create a maniac AI (extremely aggressive, raises constantly)"""
+        action_weights = {
+            Action.FOLD: 0.02,   # Almost never folds
+            Action.CHECK: 0.03,  # Rarely checks
+            Action.CALL: 0.1,    # Sometimes calls
+            Action.RAISE: 0.5,   # Raises very frequently
+            Action.ALL_IN: 0.35  # Goes all-in often
+        }
+        raise_range = (100, 300)  # Large, erratic bets
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _create_all_in_bot(self):
+        """Create an AI that always goes all-in or folds"""
+        action_weights = {
+            Action.FOLD: 0.15,   # Sometimes folds bad hands
+            Action.CHECK: 0.05,  # Rarely checks (only when no chips)
+            Action.CALL: 0.0,    # Never calls
+            Action.RAISE: 0.0,   # Never normal raises
+            Action.ALL_IN: 0.8   # Almost always all-in
+        }
+        raise_range = (1000, 1000)  # Doesn't matter, always all-in
+        return self._create_weighted_random_ai(action_weights, raise_range)
+
+    def _save_snapshot(self):
+        """Save a snapshot of the current model for the opponent pool"""
+        import copy
+
+        # Create a frozen copy of the current model
+        snapshot = copy.deepcopy(self.ai_model)
+
+        # Disable training for the snapshot
+        snapshot.epsilon = 0
+
+        # Add to pool, maintaining max size
+        self.opponent_snapshots.append(snapshot)
+        if len(self.opponent_snapshots) > self.max_snapshots:
+            self.opponent_snapshots.pop(0)  # Remove oldest snapshot
+
+        if hasattr(self, 'verbose') and self.verbose:
+            print(f"  [Snapshot saved, pool size: {len(self.opponent_snapshots)}]")

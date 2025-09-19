@@ -404,26 +404,105 @@ class UnifiedEvaluator:
         return CFRWrapper(cfr_player)
 
     def _create_random_ai(self):
-        """Create a random AI opponent"""
+        """Create a random AI opponent with mixed play styles"""
+        import numpy as np
+
+        # Randomly choose a play style to match training diversity
+        style = random.choice(['balanced', 'passive', 'aggressive', 'tight', 'loose'])
+
         class RandomAI:
-            def __init__(self):
+            def __init__(self, style):
                 self.epsilon = 0
+                self.style = style
+
+                # Define action weights based on style
+                if style == 'balanced':
+                    self.action_weights = {
+                        Action.FOLD: 0.15,
+                        Action.CHECK: 0.25,
+                        Action.CALL: 0.25,
+                        Action.RAISE: 0.25,
+                        Action.ALL_IN: 0.1
+                    }
+                elif style == 'passive':
+                    self.action_weights = {
+                        Action.FOLD: 0.1,
+                        Action.CHECK: 0.4,
+                        Action.CALL: 0.3,
+                        Action.RAISE: 0.15,
+                        Action.ALL_IN: 0.05
+                    }
+                elif style == 'aggressive':
+                    self.action_weights = {
+                        Action.FOLD: 0.05,
+                        Action.CHECK: 0.1,
+                        Action.CALL: 0.2,
+                        Action.RAISE: 0.4,
+                        Action.ALL_IN: 0.25
+                    }
+                elif style == 'tight':
+                    self.action_weights = {
+                        Action.FOLD: 0.35,
+                        Action.CHECK: 0.2,
+                        Action.CALL: 0.15,
+                        Action.RAISE: 0.2,
+                        Action.ALL_IN: 0.1
+                    }
+                else:  # loose
+                    self.action_weights = {
+                        Action.FOLD: 0.05,
+                        Action.CHECK: 0.25,
+                        Action.CALL: 0.35,
+                        Action.RAISE: 0.25,
+                        Action.ALL_IN: 0.1
+                    }
 
             def choose_action(self, state, valid_actions, **kwargs):
-                return random.choice([Action.FOLD, Action.CHECK, Action.CALL, Action.RAISE])
+                # Filter weights for valid actions
+                valid_weights = []
+                valid_acts = []
+                for action in valid_actions:
+                    if action in self.action_weights:
+                        valid_weights.append(self.action_weights[action])
+                        valid_acts.append(action)
+                    elif action == Action.CHECK:
+                        # If CHECK not in weights but is valid, use its weight
+                        valid_weights.append(0.25)
+                        valid_acts.append(action)
+                    else:
+                        valid_weights.append(0.1)  # Default weight
+                        valid_acts.append(action)
+
+                # Normalize weights
+                if valid_weights:
+                    total = sum(valid_weights)
+                    if total > 0:
+                        valid_weights = [w/total for w in valid_weights]
+                        return np.random.choice(valid_acts, p=valid_weights)
+
+                # Fallback to uniform random
+                return random.choice(valid_actions)
 
             def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000,
                              player_current_bet=0, min_raise=20):
                 pot_size = getattr(state, 'pot_size', pot)
                 available_chips = getattr(state, 'stack_size', player_chips - player_current_bet)
 
-                max_raise = min(available_chips, pot_size * 2)
-                if max_raise <= min_raise:
-                    return min_raise
+                if self.style in ['aggressive', 'loose']:
+                    # Larger raises for aggressive styles
+                    raise_amount = int(pot_size * random.uniform(0.6, 1.5))
+                elif self.style == 'passive':
+                    # Smaller raises for passive style
+                    raise_amount = int(pot_size * random.uniform(0.3, 0.6))
                 else:
-                    return random.randint(min_raise, max_raise)
+                    # Balanced raise sizing
+                    raise_amount = int(pot_size * random.uniform(0.5, 1.0))
 
-        return RandomAI()
+                # Ensure within limits
+                raise_amount = max(min_raise, min(raise_amount, available_chips))
+                return raise_amount
+
+        return RandomAI(style)
 
     def _print_evaluation_results(self, results: Dict, num_players: int):
         """Print formatted evaluation results"""
