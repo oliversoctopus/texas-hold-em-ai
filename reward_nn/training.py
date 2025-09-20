@@ -22,7 +22,8 @@ class RewardBasedTrainer:
 
     def __init__(self, ai_model: RewardBasedAI, num_players: int = 2,
                  big_blind: int = 20, starting_chips: int = 1000,
-                 variable_stacks: bool = True, min_stack_bb: int = 20, max_stack_bb: int = 200):
+                 variable_stacks: bool = True, min_stack_bb: int = 20, max_stack_bb: int = 200,
+                 progressive_stacks: bool = True):
         """Initialize trainer"""
         self.ai_model = ai_model
         self.num_players = num_players
@@ -31,6 +32,8 @@ class RewardBasedTrainer:
         self.variable_stacks = variable_stacks
         self.min_stack_bb = min_stack_bb  # Minimum stack in big blinds
         self.max_stack_bb = max_stack_bb  # Maximum stack in big blinds
+        self.progressive_stacks = progressive_stacks  # Gradually increase variation
+        self.total_training_hands = None  # Will be set during train()
 
         # Training statistics
         self.hand_count = 0
@@ -77,11 +80,18 @@ class RewardBasedTrainer:
     def train(self, num_hands: int = 1000, batch_size: int = 32,
               update_every: int = 10, verbose: bool = True):
         """Train the AI for a specified number of hands"""
+        # Store total hands for progressive stacks calculation
+        self.total_training_hands = num_hands
+
         if verbose:
             print(f"Training Reward-Based AI for {num_hands} hands...")
             print(f"Players: {self.num_players}, Big Blind: ${self.big_blind}")
             if self.variable_stacks:
-                print(f"Variable Stacks: {self.min_stack_bb}-{self.max_stack_bb} BBs (randomized each hand)")
+                if self.progressive_stacks and self.num_players == 2:
+                    print(f"Progressive Stacks: Starting uniform, increasing variation over time")
+                    print(f"Total chips fixed at 2000 for stability")
+                else:
+                    print(f"Variable Stacks: {self.min_stack_bb}-{self.max_stack_bb} BBs")
             else:
                 print(f"Fixed Stack: {self.starting_chips // self.big_blind} BBs")
             print("-" * 60)
@@ -198,6 +208,67 @@ class RewardBasedTrainer:
                 recent_loss = np.mean(self.ai_model.loss_history[-10:])
                 print(f"Recent Avg Loss: {recent_loss:.4f}")
 
+    def _get_stack_distribution(self, hand_idx: int) -> List[int]:
+        """Get stack distribution for the current hand with progressive variation"""
+        if not self.variable_stacks:
+            # Fixed stacks for all players
+            return [self.starting_chips] * self.num_players
+
+        if self.num_players != 2:
+            # For non-2-player games, use old random logic
+            stacks = []
+            for i in range(self.num_players):
+                stack_bbs = random.randint(self.min_stack_bb, self.max_stack_bb)
+                stacks.append(stack_bbs * self.big_blind)
+            return stacks
+
+        # For 2-player games with progressive stacks
+        total_chips = 2000  # Fixed total for stability
+
+        if self.progressive_stacks and self.total_training_hands:
+            # Progressive variation based on training progress
+            # Full variation after 75% of training
+            variation_threshold = max(1000, self.total_training_hands * 0.75)  # At least 1000 hands
+            progress = min(1.0, hand_idx / variation_threshold)
+        elif self.progressive_stacks:
+            # Fallback if total_training_hands not set
+            progress = min(1.0, hand_idx / 1000)  # Default to 1000 hands
+        else:
+            progress = 1.0  # Full variation immediately if not progressive
+
+        # Determine stack scenario based on hand index
+        scenario_cycle = hand_idx % 100  # Cycle through scenarios
+
+        if scenario_cycle < 25 or progress < 0.1:
+            # Uniform stacks (first 25% of cycle or very early training)
+            stack1 = total_chips // 2
+            stack2 = total_chips - stack1
+        elif scenario_cycle < 50:
+            # Small stack vs big stack scenario
+            # Variation increases with progress
+            variation = int(400 * progress)  # Max 400 chip difference
+            stack1 = (total_chips // 2) - variation
+            stack2 = total_chips - stack1
+        elif scenario_cycle < 75:
+            # Medium variation scenario
+            variation = int(200 * progress)  # Max 200 chip difference
+            if random.random() < 0.5:
+                stack1 = (total_chips // 2) + variation
+                stack2 = total_chips - stack1
+            else:
+                stack1 = (total_chips // 2) - variation
+                stack2 = total_chips - stack1
+        else:
+            # Random variation (but controlled by progress)
+            max_variation = int(600 * progress)  # Max 600 chip difference
+            variation = random.randint(-max_variation, max_variation) if max_variation > 0 else 0
+            stack1 = (total_chips // 2) + variation
+            # Ensure minimum stack size
+            stack1 = max(200, min(1800, stack1))  # At least 10BB, at most 90BB
+            stack2 = total_chips - stack1
+
+        return [stack1, stack2]
+
     def simulate_hand(self, hand_idx: int) -> Tuple[float, bool]:
         """Simulate a single hand and return reward in big blinds"""
         game = TexasHoldEmTraining(num_players=self.num_players)
@@ -206,17 +277,13 @@ class RewardBasedTrainer:
         our_all_in_count = 0
         our_player_folded = False
 
+        # Get stack distribution for this hand
+        stack_distribution = self._get_stack_distribution(hand_idx)
+
         # Setup players first, before reset
         players = []
         for i in range(self.num_players):
-            # Determine starting chips for this player - fresh random for each hand
-            if self.variable_stacks:
-                # Random stack size within the range for this specific hand
-                stack_bbs = random.randint(self.min_stack_bb, self.max_stack_bb)
-                player_chips = stack_bbs * self.big_blind
-            else:
-                player_chips = self.starting_chips
-
+            player_chips = stack_distribution[i]
             player = Player(f"Player_{i}", player_chips, is_ai=True)
 
             if i == 0:
