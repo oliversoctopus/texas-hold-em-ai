@@ -14,7 +14,7 @@ def main():
     print("2. Train BASIC 2-Player CFR (Original Neural CFR)")
     print("3. Train RAW NEURAL 2-Player CFR (End-to-End Learning)")
     print("4. Train Deep CFR (neural network enhanced for 3+ players)")
-    print("5. Train Reward-Based Neural Network AI (PPO with BB rewards)")
+    print("5. Train Reward-Based Neural Network AI (PPO with progressive stacks)")
     print("6. Load existing AI")
     print("7. Play without AI")
 
@@ -411,9 +411,16 @@ def main():
         ai_model = DeepCFRWrapper(cfr_player)
 
     elif choice == '5':
-        print("\nReward-Based Neural Network AI Training")
-        print("Uses per-hand rewards measured in big blinds to learn optimal play")
-        print("Features: Actor-Critic architecture, PPO optimization, self-attention")
+        print("\n" + "="*60)
+        print("REWARD-BASED NEURAL NETWORK AI TRAINING")
+        print("="*60)
+        print("\nUses per-hand rewards measured in big blinds to learn optimal play")
+        print("\nKey Features:")
+        print("  - Progressive stack training (uniform → varied over 75% of training)")
+        print("  - Variable raise sizing (half pot, 2/3 pot, full pot)")
+        print("  - Opponent-aware features (tracks opponent stacks/bets)")
+        print("  - Fold penalty for excessive folding (>75%)")
+        print("  - Actor-Critic architecture with PPO optimization")
         print("-" * 60)
 
         # Training configuration
@@ -491,9 +498,26 @@ def main():
             hidden_dim=hidden_dim
         )
 
+        # Ask about progressive stacks
+        use_progressive = input("\nUse progressive stack variation? (y/n, default: y): ")
+        use_progressive = use_progressive.lower() != 'n'  # Default to yes
+
+        if use_progressive and num_players == 2:
+            print("\nProgressive stacks enabled:")
+            print("  - Starting with uniform stacks (1000/1000)")
+            print("  - Gradually increasing variation over 75% of training")
+            print("  - Total chips fixed at 2000 for stability")
+        elif use_progressive:
+            print("\nNote: Progressive stacks only supported for 2 players")
+            print("Using standard random stack variation")
+            use_progressive = False
+        else:
+            print("\nUsing random stack variation throughout training")
+
         trainer = RewardBasedTrainer(
             reward_ai,
-            num_players=num_players
+            num_players=num_players,
+            progressive_stacks=use_progressive
         )
 
         trainer.train(
