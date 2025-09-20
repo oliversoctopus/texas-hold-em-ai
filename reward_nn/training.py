@@ -284,8 +284,10 @@ class RewardBasedTrainer:
                 game.community_cards.append(game.deck.draw())
 
             # Betting round
-            all_ins_this_round = self.betting_round(game, street_idx)
+            all_ins_this_round, folded_this_round = self.betting_round(game, street_idx)
             our_all_in_count += all_ins_this_round
+            if folded_this_round:
+                our_player_folded = True  # Track if folded in ANY round
 
             # Check if hand is over
             active = [p for p in game.players if not p.folded]
@@ -360,9 +362,9 @@ class RewardBasedTrainer:
         return reward_bb, won
 
     def betting_round(self, game: TexasHoldEmTraining, street_idx: int):
-        """Execute a betting round, returns number of all-ins by our player"""
+        """Execute a betting round, returns (all-ins, folded) for our player"""
         if not game.players or len(game.players) == 0:
-            return 0
+            return 0, False
 
         our_all_ins = 0  # Track our player's all-ins
         our_player_folded = False  # Track if our player folded
@@ -465,11 +467,7 @@ class RewardBasedTrainer:
 
             current = (current + 1) % num_active_players
 
-        # Update tracking for our player's folding
-        if our_player_folded and hasattr(self, '_current_training_folded'):
-            self._current_training_folded = True
-
-        return our_all_ins
+        return our_all_ins, our_player_folded
 
     def get_valid_actions(self, game, player) -> List[Action]:
         """Get valid actions for a player"""
