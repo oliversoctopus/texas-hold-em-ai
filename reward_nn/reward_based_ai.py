@@ -139,6 +139,14 @@ class RewardBasedNN(nn.Module):
             nn.Linear(hidden_dim // 2, 1)
         )
 
+        # Raise sizing head (3 options: half pot, 2/3 pot, full pot)
+        self.raise_sizer = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim // 2, 3)  # 3 raise size options
+        )
+
         self._init_weights()
 
     def _init_weights(self):
@@ -149,8 +157,8 @@ class RewardBasedNN(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-    def forward(self, state: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass returning policy logits and value estimate"""
+    def forward(self, state: Dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass returning policy logits, value estimate, and raise size logits"""
         # Extract features
         features = self._extract_features(state)
 
@@ -159,11 +167,12 @@ class RewardBasedNN(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
 
-        # Actor and critic outputs
+        # Actor, critic, and raise sizing outputs
         policy_logits = self.actor(x)
         value = self.critic(x)
+        raise_size_logits = self.raise_sizer(x)
 
-        return policy_logits, value
+        return policy_logits, value, raise_size_logits
 
     def _extract_features(self, state: Dict) -> torch.Tensor:
         """Extract features from game state"""
@@ -289,6 +298,10 @@ class RewardBasedAI:
         # For compatibility with game engine
         self.epsilon = 0  # No epsilon-greedy, we use stochastic policy
 
+        # Store last raise size decision for training
+        self.last_raise_size_probs = None
+        self.last_raise_size_idx = None
+
     def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
                           player_bet, num_players, players_in_hand, position,
                           action_history=None, opponent_info=None, hand_phase=0):
@@ -316,7 +329,7 @@ class RewardBasedAI:
             state = {'state_tensor': state}
 
         with torch.no_grad():
-            policy_logits, value = self.network(state)
+            policy_logits, value, raise_size_logits = self.network(state)
 
             # Mask invalid actions
             action_mask = torch.zeros(5, dtype=torch.bool)
@@ -338,6 +351,13 @@ class RewardBasedAI:
 
                 # Store for training
                 self.last_action_probs = action_probs.cpu().numpy()
+
+                # If raising, also decide raise size
+                if action_idx == Action.RAISE.value:
+                    raise_size_probs = F.softmax(raise_size_logits, dim=-1)
+                    raise_size_dist = torch.distributions.Categorical(raise_size_probs)
+                    self.last_raise_size_idx = raise_size_dist.sample().item()
+                    self.last_raise_size_probs = raise_size_probs.cpu().numpy()
             else:
                 # During evaluation, use stochastic policy with temperature
                 # to balance exploration and exploitation
@@ -346,6 +366,13 @@ class RewardBasedAI:
                 scaled_probs = F.softmax(scaled_logits, dim=-1)
                 action_dist = torch.distributions.Categorical(scaled_probs)
                 action_idx = action_dist.sample().item()
+
+                # If raising, also decide raise size
+                if action_idx == Action.RAISE.value:
+                    scaled_raise_logits = raise_size_logits / temperature
+                    raise_size_probs = F.softmax(scaled_raise_logits, dim=-1)
+                    raise_size_dist = torch.distributions.Categorical(raise_size_probs)
+                    self.last_raise_size_idx = raise_size_dist.sample().item()
 
         # Map to Action enum
         return Action(action_idx)
@@ -395,11 +422,11 @@ class RewardBasedAI:
             next_values = []
 
             for state, next_state in zip(states, next_states):
-                _, value = self.network(state)
+                _, value, _ = self.network(state)  # Now returns 3 values
                 values.append(value.item())
 
                 if next_state is not None:
-                    _, next_value = self.network(next_state)
+                    _, next_value, _ = self.network(next_state)  # Now returns 3 values
                     next_values.append(next_value.item())
                 else:
                     next_values.append(0)
@@ -417,7 +444,7 @@ class RewardBasedAI:
             total_loss = 0
 
             for i, state in enumerate(states):
-                policy_logits, value = self.network(state)
+                policy_logits, value, raise_size_logits = self.network(state)  # Now returns 3 values
 
                 # Get action probabilities
                 action_probs = F.softmax(policy_logits, dim=-1)
@@ -453,17 +480,23 @@ class RewardBasedAI:
 
     def get_raise_size(self, state, pot=0, current_bet=0, player_chips=1000,
                       player_current_bet=0, min_raise=20):
-        """Determine raise size (uses fixed heuristic, not learned)"""
-        # NOTE: This is a heuristic, not learned by the neural network
-        # The network only chooses whether to raise, not the size
-
+        """Determine raise size using learned network output"""
         # Calculate pot after calling
         call_amount = current_bet - player_current_bet
         pot_after_call = pot + call_amount
 
-        # Use 2/3 pot as raise size (common in poker)
-        # Round to nearest integer to avoid fractional chips
-        desired_raise = int(round(pot_after_call * 0.66))
+        # Use the last raise size decision from the network
+        if hasattr(self, 'last_raise_size_idx') and self.last_raise_size_idx is not None:
+            # Map network output to raise sizes
+            # 0 = half pot, 1 = 2/3 pot, 2 = full pot
+            size_multipliers = [0.5, 0.67, 1.0]
+            multiplier = size_multipliers[self.last_raise_size_idx]
+        else:
+            # Default to 2/3 pot if no decision was made
+            multiplier = 0.67
+
+        # Calculate desired raise based on selected size
+        desired_raise = int(round(pot_after_call * multiplier))
 
         # Ensure minimum raise requirement
         actual_raise = max(min_raise, desired_raise)
