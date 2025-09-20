@@ -371,12 +371,46 @@ class RewardBasedTrainer:
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
 
-        # Apply penalty for excessive all-ins (encourages more strategic play)
+        # Apply stronger penalty for all-ins to discourage over-aggressive play
         if our_all_in_count > 0:
-            # Small penalty for going all-in, scaled by how early it was
-            # Early all-ins are penalized more than late all-ins
-            all_in_penalty = 0.5 * our_all_in_count  # -0.5 BB per all-in
+            # Much stronger penalty, especially for early all-ins
+            # Base penalty increases with stack size (all-in with big stack = bad)
+            stack_size_factor = initial_stack_bbs / 50  # Normalize by 50BB
+
+            # Penalty based on when the all-in happened
+            # Preflop all-ins get maximum penalty
+            if len(game.community_cards) == 0:  # Preflop all-in
+                all_in_penalty = 10.0 * our_all_in_count * stack_size_factor
+            elif len(game.community_cards) == 3:  # Flop all-in
+                all_in_penalty = 6.0 * our_all_in_count * stack_size_factor
+            elif len(game.community_cards) == 4:  # Turn all-in
+                all_in_penalty = 4.0 * our_all_in_count * stack_size_factor
+            else:  # River all-in
+                all_in_penalty = 2.0 * our_all_in_count * stack_size_factor
+
             reward_bb -= all_in_penalty
+
+            # Additional penalty for going all-in too frequently
+            # Track recent all-ins in a window
+            if not hasattr(self, 'recent_all_ins'):
+                self.recent_all_ins = []
+            self.recent_all_ins.append(1)
+            if len(self.recent_all_ins) > 20:
+                self.recent_all_ins.pop(0)
+
+            # If all-in rate > 50% in recent hands, apply extra penalty
+            if len(self.recent_all_ins) >= 10:
+                all_in_rate = sum(self.recent_all_ins) / len(self.recent_all_ins)
+                if all_in_rate > 0.5:
+                    frequency_penalty = (all_in_rate - 0.5) * 10  # Up to 5 BB extra penalty
+                    reward_bb -= frequency_penalty
+        else:
+            # Track that we didn't go all-in this hand
+            if not hasattr(self, 'recent_all_ins'):
+                self.recent_all_ins = []
+            self.recent_all_ins.append(0)
+            if len(self.recent_all_ins) > 20:
+                self.recent_all_ins.pop(0)
 
         # Track folding behavior
         self.recent_folds.append(1 if our_player_folded else 0)
@@ -664,20 +698,20 @@ class RewardBasedTrainer:
 
     def _choose_opponent(self, hand_idx: int) -> str:
         """Choose opponent type based on curriculum"""
-        # More balanced curriculum with capped self-play
+        # Stronger curriculum with less exploitable opponents
         progress = min(1.0, hand_idx / 1000)
 
         weights = {
-            'random_passive': 0.08,
-            'random_aggressive': 0.08,
-            'tight_aggressive': 0.08,
-            'loose_passive': 0.08,
-            'calling_station': 0.05,
-            'maniac': 0.05,
-            'all_in_bot': 0.08,  # New: always goes all-in
-            'self': 0.15 + 0.15 * progress,  # Max 30% self-play
-            'snapshot': 0.1 * progress if hasattr(self, 'opponent_snapshots') and self.opponent_snapshots else 0,
-            'model': 0.1 if self.opponent_models else 0
+            'random_passive': 0.05,  # Reduced
+            'random_aggressive': 0.05,  # Reduced
+            'tight_aggressive': 0.15,  # Increased - harder opponent
+            'loose_passive': 0.05,  # Reduced
+            'calling_station': 0.03,  # Reduced - too exploitable
+            'maniac': 0.07,
+            'all_in_bot': 0.02,  # Greatly reduced - too exploitable
+            'self': 0.25 + 0.15 * progress,  # More self-play for better learning
+            'snapshot': 0.15 * progress if hasattr(self, 'opponent_snapshots') and self.opponent_snapshots else 0,
+            'model': 0.15 if self.opponent_models else 0  # More games against strong models
         }
 
         # Normalize weights
