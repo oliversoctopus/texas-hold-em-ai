@@ -99,6 +99,7 @@ class RewardBasedNN(nn.Module):
 
     def __init__(self, hidden_dim: int = 256, num_actions: int = 5):
         super().__init__()
+        self.hidden_dim = hidden_dim  # Store for architecture detection
 
         # Feature encoders
         self.card_embedding = CardEmbedding(embedding_dim=16)
@@ -516,6 +517,7 @@ class RewardBasedAI:
             'optimizer_state': self.optimizer.state_dict(),
             'training_step': self.training_step,
             'episode_rewards': self.episode_rewards,
+            'hidden_dim': self.network.hidden_dim,  # Save architecture info
             'config': {
                 'gamma': self.gamma,
                 'clip_epsilon': self.clip_epsilon,
@@ -527,6 +529,22 @@ class RewardBasedAI:
     def load(self, filepath: str):
         """Load model from file"""
         checkpoint = torch.load(filepath, map_location=self.device)
+
+        # Detect architecture from checkpoint
+        hidden_dim = checkpoint.get('hidden_dim', None)
+        if hidden_dim is None:
+            # Try to infer from layer shapes
+            state_dict = checkpoint['network_state']
+            if 'input_projection.weight' in state_dict:
+                hidden_dim = state_dict['input_projection.weight'].shape[0]
+            else:
+                hidden_dim = 256  # Default fallback
+
+        # Recreate network with correct architecture if needed
+        if hidden_dim != self.network.hidden_dim:
+            self.network = RewardBasedNN(hidden_dim=hidden_dim).to(self.device)
+            self.optimizer = optim.Adam(self.network.parameters(), lr=3e-4)
+
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
         self.training_step = checkpoint.get('training_step', 0)

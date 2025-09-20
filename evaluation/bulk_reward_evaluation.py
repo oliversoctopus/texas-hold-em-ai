@@ -27,13 +27,33 @@ class BulkRewardEvaluator:
 
     def load_model(self, model_path: str) -> RewardBasedAI:
         """Load a reward-based AI model, handling compatibility issues"""
+        model_name = os.path.basename(model_path)
         try:
-            ai = RewardBasedAI()
+            # First, detect the architecture from the checkpoint
+            checkpoint = torch.load(model_path, map_location='cpu')
+
+            # Detect hidden dimension
+            hidden_dim = checkpoint.get('hidden_dim', None)
+            if hidden_dim is None:
+                # Try to infer from layer shapes
+                state_dict = checkpoint.get('network_state', {})
+                if 'input_projection.weight' in state_dict:
+                    hidden_dim = state_dict['input_projection.weight'].shape[0]
+                else:
+                    hidden_dim = 256  # Default fallback
+
+            # Create AI instance with correct architecture
+            ai = RewardBasedAI(hidden_dim=hidden_dim)
             ai.load(model_path)
             ai.epsilon = 0  # No exploration during evaluation
             return ai
         except Exception as e:
-            print(f"  Warning: Could not load {os.path.basename(model_path)}: {str(e)[:50]}")
+            # Check for specific compatibility issues
+            error_str = str(e)
+            if "Missing key(s)" in error_str or "size mismatch" in error_str:
+                print(f"  {model_name} is incompatible with the current version")
+            else:
+                print(f"  Warning: Could not load {model_name}: {str(e)[:50]}")
             return None
 
     def evaluate_model(self, model_path: str, num_games: int = 100, verbose: bool = False) -> Dict:

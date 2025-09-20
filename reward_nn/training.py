@@ -309,6 +309,8 @@ class RewardBasedTrainer:
                     player.ai_model = self._create_maniac_ai()
                 elif opponent_type == 'all_in_bot':
                     player.ai_model = self._create_all_in_bot()
+                elif opponent_type == 'uniform_random':
+                    player.ai_model = self._create_uniform_random_ai()
                 elif opponent_type == 'snapshot' and hasattr(self, 'opponent_snapshots') and self.opponent_snapshots:
                     snapshot_model = random.choice(self.opponent_snapshots)
                     player.ai_model = snapshot_model
@@ -709,7 +711,8 @@ class RewardBasedTrainer:
             'calling_station': 0.03,  # Reduced - too exploitable
             'maniac': 0.07,
             'all_in_bot': 0.02,  # Greatly reduced - too exploitable
-            'self': 0.25 + 0.15 * progress,  # More self-play for better learning
+            #'uniform_random': 0.2,  # Use uniform random only for now (testing)
+            'self': 0.25 - 0.15 * progress,  # More self-play for better learning
             'snapshot': 0.15 * progress if hasattr(self, 'opponent_snapshots') and self.opponent_snapshots else 0,
             'model': 0.15 if self.opponent_models else 0  # More games against strong models
         }
@@ -786,6 +789,18 @@ class RewardBasedTrainer:
                 pass
 
         return RandomAI(action_weights, raise_range)
+
+    def _create_uniform_random_ai(self):
+        """Create a uniform random AI (equal chance for all actions)"""
+        action_weights = {
+            Action.FOLD: 0.2,
+            Action.CHECK: 0.2,
+            Action.CALL: 0.2,
+            Action.RAISE: 0.2,
+            Action.ALL_IN: 0.2
+        }
+        raise_range = (40, 100)  # Moderate bets when raising
+        return self._create_weighted_random_ai(action_weights, raise_range)
 
     def _create_tight_aggressive_ai(self):
         """Create a tight-aggressive AI (plays few hands but plays them aggressively)"""
