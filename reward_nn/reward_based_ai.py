@@ -110,7 +110,8 @@ class RewardBasedNN(nn.Module):
         position_features = 16
         action_features = 64
         game_features = 10  # pot odds, stack sizes, etc.
-        total_features = card_features + position_features + action_features + game_features  # 112 + 16 + 64 + 10 = 202
+        opponent_features = 20  # Space for opponent stack/bet info (max 5 opponents, 4 features each)
+        total_features = card_features + position_features + action_features + game_features + opponent_features  # 112 + 16 + 64 + 10 + 20 = 222
 
         # Shared layers
         self.input_projection = nn.Linear(total_features, hidden_dim)
@@ -226,8 +227,36 @@ class RewardBasedNN(nn.Module):
             state.get('is_preflop_aggressor', 0)
         ])  # Exactly 10 features
 
-        # Combine all features (112 + 16 + 64 + 10 = 202)
-        return torch.cat([card_features, position_features, action_features, game_features])
+        # Opponent features (max 5 opponents, 4 features each = 20 total)
+        opponent_features_list = []
+        opponent_info = state.get('opponent_info', [])
+
+        for i in range(5):  # Max 5 opponents
+            if i < len(opponent_info):
+                opp = opponent_info[i]
+                opp_chips = opp.get('chips', 0)
+                opp_bet = opp.get('current_bet', 0)
+                opp_all_in = float(opp.get('all_in', False))
+
+                # Normalize opponent features
+                opp_stack_bb = opp_chips / (big_blind + 1e-8)
+                opp_bet_to_pot = opp_bet / (pot_size + 1e-8)
+                opp_stack_to_our_stack = opp_chips / (stack_size + 1e-8)
+
+                opponent_features_list.extend([
+                    opp_stack_bb / 100,  # Normalized stack in BBs
+                    opp_bet_to_pot,  # Their bet relative to pot
+                    opp_stack_to_our_stack,  # Stack ratio vs us
+                    opp_all_in  # Whether they're all-in
+                ])
+            else:
+                # Pad with zeros if fewer opponents
+                opponent_features_list.extend([0.0, 0.0, 0.0, 0.0])
+
+        opponent_features = torch.FloatTensor(opponent_features_list)  # Exactly 20 features
+
+        # Combine all features (112 + 16 + 64 + 10 + 20 = 222)
+        return torch.cat([card_features, position_features, action_features, game_features, opponent_features])
 
 
 class RewardBasedAI:
@@ -262,7 +291,7 @@ class RewardBasedAI:
 
     def get_state_features(self, hand, community_cards, pot, current_bet, player_chips,
                           player_bet, num_players, players_in_hand, position,
-                          action_history=None, opponent_bets=None, hand_phase=0):
+                          action_history=None, opponent_info=None, hand_phase=0):
         """Extract features from game state (compatibility method)"""
         return {
             'hole_cards': hand if hand else [],
@@ -276,7 +305,8 @@ class RewardBasedAI:
             'action_history': [a.value if hasattr(a, 'value') else a for a in (action_history or [])],
             'hand_phase': hand_phase,
             'big_blind': 20,  # Default big blind
-            'is_preflop_aggressor': 0
+            'is_preflop_aggressor': 0,
+            'opponent_info': opponent_info if opponent_info else []
         }
 
     def choose_action(self, state, valid_actions, training=False, **kwargs):

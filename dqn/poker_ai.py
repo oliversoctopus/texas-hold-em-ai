@@ -147,10 +147,22 @@ class PokerAI:
         
         # Opponent aggression metrics
         if opponent_bets and len(opponent_bets) > 0:
-            recent_bets = opponent_bets[-5:]
-            avg_bet = np.mean(recent_bets)
-            max_bet = max(recent_bets)
-            aggression_factor = len([b for b in recent_bets if b > 20]) / len(recent_bets)
+            # Handle both old format (list of numbers) and new format (list of dicts)
+            if isinstance(opponent_bets[0], dict):
+                # New format with opponent info dicts
+                recent_bets = [opp.get('current_bet', 0) for opp in opponent_bets[-5:]]
+            else:
+                # Old format with just bet amounts
+                recent_bets = opponent_bets[-5:]
+
+            if recent_bets:
+                avg_bet = np.mean(recent_bets) if recent_bets else 0
+                max_bet = max(recent_bets) if recent_bets else 0
+                aggression_factor = len([b for b in recent_bets if b > 20]) / len(recent_bets)
+            else:
+                avg_bet = 0
+                max_bet = 0
+                aggression_factor = 0
             
             features.extend([
                 avg_bet / 1000,

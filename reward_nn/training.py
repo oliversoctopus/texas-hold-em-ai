@@ -274,11 +274,21 @@ class RewardBasedTrainer:
 
         # Store experience with reward
         if hasattr(our_player.ai_model, 'remember'):
+            # Collect final opponent information
+            final_opponent_info = []
+            for p in game.players:
+                if p != our_player and not p.folded:
+                    final_opponent_info.append({
+                        'chips': p.chips,
+                        'current_bet': p.current_bet,
+                        'all_in': p.all_in
+                    })
+
             # Create final state
             final_state = our_player.ai_model.get_state_features(
                 our_player.hand, game.community_cards, game.pot, 0,
                 our_player.chips, 0, self.num_players, 1, 0,
-                game.action_history, [], hand_phase=3
+                game.action_history, final_opponent_info, hand_phase=3
             )
 
             # Store with the BB-based reward
@@ -319,11 +329,21 @@ class RewardBasedTrainer:
                     break
 
             # Get state for the AI
+            # Collect opponent information
+            opponent_info = []
+            for p in game.players:
+                if p != player and not p.folded:
+                    opponent_info.append({
+                        'chips': p.chips,
+                        'current_bet': p.current_bet,
+                        'all_in': p.all_in
+                    })
+
             state = player.ai_model.get_state_features(
                 player.hand, game.community_cards, game.pot, game.current_bet,
                 player.chips, player.current_bet, self.num_players,
                 sum(1 for p in game.players if not p.folded),
-                current, game.action_history[-10:], [], hand_phase=street_idx
+                current, game.action_history[-10:], opponent_info, hand_phase=street_idx
             )
 
             # Get valid actions
@@ -344,11 +364,21 @@ class RewardBasedTrainer:
 
             # Store experience
             if hasattr(player.ai_model, 'remember') and player == game.players[0]:
+                # Collect opponent information for next state
+                next_opponent_info = []
+                for p in game.players:
+                    if p != player and not p.folded:
+                        next_opponent_info.append({
+                            'chips': p.chips,
+                            'current_bet': p.current_bet,
+                            'all_in': p.all_in
+                        })
+
                 next_state = player.ai_model.get_state_features(
                     player.hand, game.community_cards, game.pot, game.current_bet,
                     player.chips, player.current_bet, self.num_players,
                     sum(1 for p in game.players if not p.folded),
-                    current, game.action_history[-10:], [], hand_phase=street_idx
+                    current, game.action_history[-10:], next_opponent_info, hand_phase=street_idx
                 )
 
                 # Intermediate reward (small shaping rewards)
