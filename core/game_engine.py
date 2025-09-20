@@ -348,10 +348,11 @@ class TexasHoldEmTraining:
     
     def determine_winners(self):
         """Determine winners of the hand"""
-        active = [p for p in self.players if not p.folded]
+        # Only include players who are not folded AND have cards (not eliminated)
+        active = [p for p in self.players if not p.folded and p.hand and len(p.hand) > 0]
         if len(active) == 1:
             return active
-        
+
         # Fill community cards if needed
         while len(self.community_cards) < 5:
             card = self.deck.draw()
@@ -359,7 +360,7 @@ class TexasHoldEmTraining:
                 self.community_cards.append(card)
             else:
                 break  # Deck is empty
-        
+
         scores = []
         for player in active:
             # Filter out None cards (in case deck ran out)
@@ -897,10 +898,11 @@ class TexasHoldEm:
     
     def determine_winners(self, verbose=True):
         """Determine winners"""
-        active = [p for p in self.players if not p.folded]
+        # Only include players who are not folded AND have cards (not eliminated)
+        active = [p for p in self.players if not p.folded and p.hand and len(p.hand) > 0]
         if len(active) == 1:
             return active
-        
+
         # Fill community cards
         while len(self.community_cards) < 5:
             card = self.deck.draw()
@@ -908,7 +910,7 @@ class TexasHoldEm:
                 self.community_cards.append(card)
             else:
                 break  # Deck is empty
-        
+
         scores = []
         for player in active:
             # Filter out None cards (in case deck ran out)
