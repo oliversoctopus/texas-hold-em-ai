@@ -259,17 +259,20 @@ class BulkRewardEvaluator:
                                         game.current_bet = player.current_bet
                             else:
                                 # Opponent plays
-                                if opponent_ai:
-                                    # Use opponent AI
-                                    state = opponent_ai.get_state_features(
+                                if hasattr(opponent_player.ai_model, 'get_state_features'):
+                                    # Use opponent AI with full state features
+                                    state = opponent_player.ai_model.get_state_features(
                                         player.hand, game.community_cards, game.pot,
                                         game.current_bet, player.chips, player.current_bet,
                                         2, sum(1 for p in game.players if not p.folded),
                                         player_idx, [], None
                                     )
-                                    action = opponent_ai.choose_action(state, valid_actions, training=False)
+                                    action = opponent_player.ai_model.choose_action(state, valid_actions, training=False)
+                                elif hasattr(opponent_player.ai_model, 'choose_action'):
+                                    # Simple AI without state features
+                                    action = opponent_player.ai_model.choose_action(None, valid_actions)
                                 else:
-                                    # Random opponent
+                                    # Random fallback
                                     action = np.random.choice(valid_actions)
 
                                 # Execute opponent action (simplified)
