@@ -16,6 +16,7 @@ from reward_nn.reward_based_ai import RewardBasedAI
 from core.game_engine import TexasHoldEm
 from core.player import Player
 from core.game_constants import Action
+from core.card_deck import evaluate_hand
 from dqn.poker_ai import PokerAI
 
 
@@ -298,15 +299,37 @@ class BulkRewardEvaluator:
                     if len(active) <= 1:
                         break
 
-                # Determine winner (simplified)
+                # Determine winner with proper hand evaluation
                 active = [p for p in game.players if not p.folded]
                 if len(active) == 1:
                     winner = active[0]
+                    winner.chips += game.pot
                 else:
-                    # Simple showdown - random winner for simplicity
-                    winner = active[0] if np.random.random() < 0.5 else active[1]
+                    # Proper showdown - evaluate hands
+                    best_value = -1
+                    winners = []
 
-                winner.chips += game.pot
+                    for player in active:
+                        if player.hand and game.community_cards:
+                            all_cards = player.hand + game.community_cards
+                            hand_value = evaluate_hand(all_cards)
+
+                            if hand_value > best_value:
+                                best_value = hand_value
+                                winners = [player]
+                            elif hand_value == best_value:
+                                winners.append(player)
+
+                    # Split pot among winners
+                    if winners:
+                        split_pot = game.pot // len(winners)
+                        remainder = game.pot % len(winners)
+
+                        for i, winner in enumerate(winners):
+                            if i < remainder:
+                                winner.chips += split_pot + 1
+                            else:
+                                winner.chips += split_pot
 
                 hands_this_game += 1
                 total_hands += 1
