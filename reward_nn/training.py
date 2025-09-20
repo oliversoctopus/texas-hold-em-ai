@@ -93,6 +93,13 @@ class RewardBasedTrainer:
         total_all_ins = 0  # Track all-in frequency
         total_folds = 0  # Track fold frequency
 
+        # Rolling window tracking for display stats (last 100 hands)
+        recent_wins = []  # 1 for win, 0 for loss
+        recent_bb = []  # BB won/lost per hand
+        recent_all_ins = []  # 1 if went all-in, 0 otherwise
+        recent_folds_display = []  # 1 if folded, 0 otherwise
+        window_size = 100  # Display stats for last 100 hands
+
         for hand_idx in range(num_hands):
             # Track all-ins and folds for this hand
             self._current_training_all_ins = 0
@@ -112,6 +119,22 @@ class RewardBasedTrainer:
             if won:
                 wins += 1
 
+            # Track for rolling windows
+            recent_wins.append(1 if won else 0)
+            recent_bb.append(hand_reward_bb)
+            recent_all_ins.append(1 if self._current_training_all_ins > 0 else 0)
+            recent_folds_display.append(1 if self._current_training_folded else 0)
+
+            # Keep windows at max size
+            if len(recent_wins) > window_size:
+                recent_wins.pop(0)
+            if len(recent_bb) > window_size:
+                recent_bb.pop(0)
+            if len(recent_all_ins) > window_size:
+                recent_all_ins.pop(0)
+            if len(recent_folds_display) > window_size:
+                recent_folds_display.pop(0)
+
             self.bb_per_hand.append(hand_reward_bb)
             self.hand_count += 1
 
@@ -126,19 +149,22 @@ class RewardBasedTrainer:
 
             # Progress update
             if verbose and (hand_idx + 1) % 100 == 0:
-                win_rate = (wins / (hand_idx + 1)) * 100
-                avg_bb = total_bb_won / (hand_idx + 1)
-                all_in_rate = (total_all_ins / (hand_idx + 1)) * 100
-                fold_rate = (total_folds / (hand_idx + 1)) * 100
+                # Calculate stats for the recent window
+                recent_win_rate = (sum(recent_wins) / len(recent_wins)) * 100 if recent_wins else 0
+                recent_avg_bb = sum(recent_bb) / len(recent_bb) if recent_bb else 0
+                recent_all_in_rate = (sum(recent_all_ins) / len(recent_all_ins)) * 100 if recent_all_ins else 0
+                recent_fold_rate = (sum(recent_folds_display) / len(recent_folds_display)) * 100 if recent_folds_display else 0
+
                 elapsed = time.time() - start_time
                 hands_per_sec = (hand_idx + 1) / elapsed
 
                 print(f"Hands: {hand_idx + 1}/{num_hands} | "
-                      f"Win Rate: {win_rate:.1f}% | "
-                      f"Avg BB/hand: {avg_bb:+.2f} | "
-                      f"Fold: {fold_rate:.1f}% | "
-                      f"All-in: {all_in_rate:.1f}% | "
+                      f"Win Rate: {recent_win_rate:.1f}% | "
+                      f"Avg BB/hand: {recent_avg_bb:+.2f} | "
+                      f"Fold: {recent_fold_rate:.1f}% | "
+                      f"All-in: {recent_all_in_rate:.1f}% | "
                       f"Speed: {hands_per_sec:.1f} hands/sec")
+                print(f"  (Last {len(recent_wins)} hands)")
 
                 # Clear old experiences to prevent memory issues
                 if len(self.ai_model.memory) > 5000:
@@ -152,13 +178,18 @@ class RewardBasedTrainer:
             total_time = time.time() - start_time
             final_win_rate = (wins / num_hands) * 100
             final_avg_bb = total_bb_won / num_hands
+            final_all_in_rate = (total_all_ins / num_hands) * 100
+            final_fold_rate = (total_folds / num_hands) * 100
 
             print("\n" + "=" * 60)
             print("TRAINING COMPLETE")
             print("=" * 60)
             print(f"Total Hands: {num_hands}")
-            print(f"Win Rate: {final_win_rate:.1f}%")
-            print(f"Avg BB/hand: {final_avg_bb:+.3f}")
+            print(f"Overall Statistics:")
+            print(f"  Win Rate: {final_win_rate:.1f}%")
+            print(f"  Avg BB/hand: {final_avg_bb:+.3f}")
+            print(f"  Fold Rate: {final_fold_rate:.1f}%")
+            print(f"  All-in Rate: {final_all_in_rate:.1f}%")
             print(f"Training Time: {total_time:.1f} seconds")
             print(f"Hands/second: {num_hands / total_time:.1f}")
 
