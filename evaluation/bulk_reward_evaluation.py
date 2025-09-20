@@ -7,6 +7,7 @@ import os
 import glob
 import torch
 import numpy as np
+import random
 from typing import Dict, List, Tuple
 from collections import defaultdict
 import time
@@ -24,6 +25,29 @@ class BulkRewardEvaluator:
     def __init__(self, models_dir: str = "models/reward_nn"):
         self.models_dir = models_dir
         self.results = {}
+
+    def _create_random_ai(self):
+        """Create a simple random AI opponent"""
+        import random as rnd
+
+        class RandomAI:
+            def __init__(self):
+                self.epsilon = 0
+
+            def choose_action(self, state, valid_actions, **kwargs):
+                # Simple random strategy with bias
+                if Action.CHECK in valid_actions and rnd.random() < 0.4:
+                    return Action.CHECK
+                elif Action.CALL in valid_actions and rnd.random() < 0.3:
+                    return Action.CALL
+                elif Action.FOLD in valid_actions and rnd.random() < 0.2:
+                    return Action.FOLD
+                return rnd.choice(valid_actions)
+
+            def get_raise_size(self, *args, **kwargs):
+                return 40  # Fixed small raise
+
+        return RandomAI()
 
     def load_model(self, model_path: str) -> RewardBasedAI:
         """Load a reward-based AI model, handling compatibility issues"""
@@ -87,18 +111,27 @@ class BulkRewardEvaluator:
             'postflop_actions': defaultdict(int),
         }
 
-        # Load a benchmark opponent (DQN model if available)
-        opponent_ai = None
-        try:
-            opponent_path = "models/dqn/poker_ai_tuned.pth"
-            if os.path.exists(opponent_path):
-                opponent_ai = PokerAI()
-                opponent_ai.load(opponent_path)
-                opponent_ai.epsilon = 0
-                opponent_type = "DQN"
-            else:
-                opponent_type = "Random"
-        except:
+        # Load benchmark opponents (multiple DQN models like unified evaluation)
+        benchmark_models = []
+        potential_paths = [
+            'models/dqn/tuned_ai_v2.pth',
+            'models/dqn/tuned_ai_v4.pth',
+            'models/dqn/poker_ai_tuned.pth',
+        ]
+
+        for path in potential_paths:
+            if os.path.exists(path):
+                try:
+                    model = PokerAI()
+                    model.load(path)
+                    model.epsilon = 0
+                    benchmark_models.append(model)
+                except:
+                    pass
+
+        if benchmark_models:
+            opponent_type = "DQN (pool)"
+        else:
             opponent_type = "Random"
 
         # Play evaluation games
@@ -115,8 +148,13 @@ class BulkRewardEvaluator:
             test_player = Player("TestAI", starting_chips, is_ai=True)
             test_player.ai_model = ai_model
             opponent_player = Player("Opponent", starting_chips, is_ai=True)
-            if opponent_ai:
-                opponent_player.ai_model = opponent_ai
+
+            # Select opponent (randomly from pool like unified evaluation)
+            if benchmark_models:
+                opponent_player.ai_model = random.choice(benchmark_models)
+            else:
+                # Create random opponent if no DQN models available
+                opponent_player.ai_model = self._create_random_ai()
 
             game.players = [test_player, opponent_player]
 
@@ -357,6 +395,8 @@ class BulkRewardEvaluator:
         print(f"\n{'='*80}")
         print("EVALUATION SUMMARY REPORT")
         print(f"{'='*80}\n")
+        print("Note: Evaluation uses a pool of DQN opponents (tuned_ai_v2, tuned_ai_v4, poker_ai_tuned)")
+        print("      Results should now match post-training evaluation metrics\n")
 
         # Separate compatible and incompatible models
         compatible = [r for r in results if r['status'] == 'success']
