@@ -21,12 +21,16 @@ class RewardBasedTrainer:
     """Trainer for reward-based AI using self-play and PPO"""
 
     def __init__(self, ai_model: RewardBasedAI, num_players: int = 2,
-                 big_blind: int = 20, starting_chips: int = 1000):
+                 big_blind: int = 20, starting_chips: int = 1000,
+                 variable_stacks: bool = True, min_stack_bb: int = 20, max_stack_bb: int = 200):
         """Initialize trainer"""
         self.ai_model = ai_model
         self.num_players = num_players
         self.big_blind = big_blind
         self.starting_chips = starting_chips
+        self.variable_stacks = variable_stacks
+        self.min_stack_bb = min_stack_bb  # Minimum stack in big blinds
+        self.max_stack_bb = max_stack_bb  # Maximum stack in big blinds
 
         # Training statistics
         self.hand_count = 0
@@ -70,6 +74,10 @@ class RewardBasedTrainer:
         if verbose:
             print(f"Training Reward-Based AI for {num_hands} hands...")
             print(f"Players: {self.num_players}, Big Blind: ${self.big_blind}")
+            if self.variable_stacks:
+                print(f"Variable Stacks: {self.min_stack_bb}-{self.max_stack_bb} BBs (randomized each hand)")
+            else:
+                print(f"Fixed Stack: {self.starting_chips // self.big_blind} BBs")
             print("-" * 60)
 
         start_time = time.time()
@@ -157,7 +165,15 @@ class RewardBasedTrainer:
         # Setup players first, before reset
         players = []
         for i in range(self.num_players):
-            player = Player(f"Player_{i}", self.starting_chips, is_ai=True)
+            # Determine starting chips for this player - fresh random for each hand
+            if self.variable_stacks:
+                # Random stack size within the range for this specific hand
+                stack_bbs = random.randint(self.min_stack_bb, self.max_stack_bb)
+                player_chips = stack_bbs * self.big_blind
+            else:
+                player_chips = self.starting_chips
+
+            player = Player(f"Player_{i}", player_chips, is_ai=True)
 
             if i == 0:
                 # Our training AI
@@ -211,6 +227,7 @@ class RewardBasedTrainer:
         game.current_bet = self.big_blind
 
         initial_chips = game.players[0].chips
+        initial_stack_bbs = initial_chips / self.big_blind  # Track initial stack in BBs
         # Debug output removed
 
         # Play through streets

@@ -219,8 +219,8 @@ class RewardBasedNN(nn.Module):
             stack_to_bb / 100,  # Normalize to reasonable range
             pot_to_bb / 10,
             call_to_stack,
-            players_in_hand / 6,
-            players_folded / 6,
+            players_in_hand / max(num_players, 1),  # Normalize by actual number of players
+            players_folded / max(num_players, 1),  # Normalize by actual number of players
             position / max(num_players - 1, 1),  # Avoid division by zero
             state.get('hand_phase', 0) / 3,  # 0=preflop, 1=flop, 2=turn, 3=river
             state.get('is_preflop_aggressor', 0)
