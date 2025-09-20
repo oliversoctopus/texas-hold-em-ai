@@ -1,0 +1,63 @@
+[
+  {
+    "model_name": "ra_standard_768_v2.pth",
+    "status": "success",
+    "games_played": 100,
+    "win_rate": 89.0,
+    "win_rate_vs_random": 92.0,
+    "win_rate_vs_dqn": 86.0,
+    "bb_per_hand": -1.5594999999999999,
+    "action_distribution": {},
+    "survival_rate": 100.0
+  },
+  {
+    "model_name": "reward_ai_professional_768d.pth",
+    "status": "success",
+    "games_played": 100,
+    "win_rate": 82.0,
+    "win_rate_vs_random": 84.0,
+    "win_rate_vs_dqn": 80.0,
+    "bb_per_hand": -1.5459999999999998,
+    "action_distribution": {},
+    "survival_rate": 100.0
+  },
+  {
+    "model_name": "reward_ai_quick_256d.pth",
+    "status": "success",
+    "games_played": 100,
+    "win_rate": 76.0,
+    "win_rate_vs_random": 72.0,
+    "win_rate_vs_dqn": 80.0,
+    "bb_per_hand": -2.1,
+    "action_distribution": {
+      "FOLD": 78.57142857142857,
+      "CHECK": 0.0,
+      "CALL": 0.0,
+      "RAISE": 0.0,
+      "ALL_IN": 21.428571428571427
+    },
+    "survival_rate": 95.0
+  },
+  {
+    "model_name": "reward_ai_standard_768d.pth",
+    "status": "success",
+    "games_played": 100,
+    "win_rate": 84.0,
+    "win_rate_vs_random": 84.0,
+    "win_rate_vs_dqn": 84.0,
+    "bb_per_hand": -1.381,
+    "action_distribution": {},
+    "survival_rate": 100.0
+  },
+  {
+    "model_name": "rn_different_distribution.pth",
+    "status": "success",
+    "games_played": 100,
+    "win_rate": 85.0,
+    "win_rate_vs_random": 84.0,
+    "win_rate_vs_dqn": 86.0,
+    "bb_per_hand": -1.63,
+    "action_distribution": {},
+    "survival_rate": 100.0
+  }
+]

@@ -13,11 +13,7 @@ from collections import defaultdict
 import time
 
 from reward_nn.reward_based_ai import RewardBasedAI
-from core.game_engine import TexasHoldEm
-from core.player import Player
-from core.game_constants import Action
-from core.card_deck import evaluate_hand
-from dqn.poker_ai import PokerAI
+from evaluation.unified_evaluation import evaluate_reward_based_ai
 
 
 class BulkRewardEvaluator:
@@ -26,29 +22,6 @@ class BulkRewardEvaluator:
     def __init__(self, models_dir: str = "models/reward_nn"):
         self.models_dir = models_dir
         self.results = {}
-
-    def _create_random_ai(self):
-        """Create a simple random AI opponent"""
-        import random as rnd
-
-        class RandomAI:
-            def __init__(self):
-                self.epsilon = 0
-
-            def choose_action(self, state, valid_actions, **kwargs):
-                # Simple random strategy with bias
-                if Action.CHECK in valid_actions and rnd.random() < 0.4:
-                    return Action.CHECK
-                elif Action.CALL in valid_actions and rnd.random() < 0.3:
-                    return Action.CALL
-                elif Action.FOLD in valid_actions and rnd.random() < 0.2:
-                    return Action.FOLD
-                return rnd.choice(valid_actions)
-
-            def get_raise_size(self, *args, **kwargs):
-                return 40  # Fixed small raise
-
-        return RandomAI()
 
     def load_model(self, model_path: str) -> RewardBasedAI:
         """Load a reward-based AI model, handling compatibility issues"""
@@ -82,7 +55,7 @@ class BulkRewardEvaluator:
             return None
 
     def evaluate_model(self, model_path: str, num_games: int = 100, verbose: bool = False) -> Dict:
-        """Evaluate a single model"""
+        """Evaluate a single model using unified evaluation logic"""
         model_name = os.path.basename(model_path)
 
         # Try to load the model
@@ -96,286 +69,42 @@ class BulkRewardEvaluator:
 
         print(f"  Evaluating {model_name}...")
 
-        # Track statistics
+        # Use unified evaluation for consistency
+        # Test vs random opponents
+        random_results = evaluate_reward_based_ai(
+            ai_model,
+            num_games=num_games // 2,  # Split games between random and DQN
+            num_players=2,
+            use_random_opponents=True,
+            verbose=False
+        )
+
+        # Test vs DQN opponents
+        dqn_results = evaluate_reward_based_ai(
+            ai_model,
+            num_games=num_games // 2,
+            num_players=2,
+            use_random_opponents=False,
+            verbose=False
+        )
+
+        # Combine results from both opponent types
+        total_games = num_games
+        combined_wins = (random_results['win_rate'] * (num_games // 2) +
+                        dqn_results['win_rate'] * (num_games // 2)) / total_games
+
+        # Prepare stats dictionary matching expected format
         stats = {
             'model_name': model_name,
             'status': 'success',
-            'games_played': 0,
-            'wins': 0,
-            'total_chips_won': 0,
-            'action_counts': defaultdict(int),
-            'action_distribution': {},
-            'avg_bb_per_hand': 0,
-            'survival_rate': 0,
-            'hands_played': 0,
-            'preflop_actions': defaultdict(int),
-            'postflop_actions': defaultdict(int),
+            'games_played': total_games,
+            'win_rate': combined_wins,
+            'win_rate_vs_random': random_results['win_rate'],
+            'win_rate_vs_dqn': dqn_results['win_rate'],
+            'bb_per_hand': (random_results.get('bb_per_hand', 0) + dqn_results.get('bb_per_hand', 0)) / 2,
+            'action_distribution': dqn_results.get('action_distribution', {}),
+            'survival_rate': (random_results.get('survival_rate', 0) + dqn_results.get('survival_rate', 0)) / 2,
         }
-
-        # Load benchmark opponents (multiple DQN models like unified evaluation)
-        benchmark_models = []
-        potential_paths = [
-            'models/dqn/tuned_ai_v2.pth',
-            'models/dqn/tuned_ai_v4.pth',
-            'models/dqn/poker_ai_tuned.pth',
-        ]
-
-        for path in potential_paths:
-            if os.path.exists(path):
-                try:
-                    model = PokerAI()
-                    model.load(path)
-                    model.epsilon = 0
-                    benchmark_models.append(model)
-                except:
-                    pass
-
-        if benchmark_models:
-            opponent_type = "DQN (pool)"
-        else:
-            opponent_type = "Random"
-
-        # Play evaluation games
-        starting_chips = 1000
-        total_hands = 0
-        survived_games = 0
-
-        for game_idx in range(num_games):
-            # Create game
-            game = TexasHoldEm(num_players=2, starting_chips=starting_chips, verbose=False)
-
-            # Setup players
-            game.players = []
-            test_player = Player("TestAI", starting_chips, is_ai=True)
-            test_player.ai_model = ai_model
-            opponent_player = Player("Opponent", starting_chips, is_ai=True)
-
-            # Select opponent (randomly from pool like unified evaluation)
-            if benchmark_models:
-                opponent_player.ai_model = random.choice(benchmark_models)
-            else:
-                # Create random opponent if no DQN models available
-                opponent_player.ai_model = self._create_random_ai()
-
-            game.players = [test_player, opponent_player]
-
-            # Play the game (max hands to prevent infinite games)
-            max_hands = 100
-            hands_this_game = 0
-
-            for hand_num in range(max_hands):
-                # Check if game is over
-                if test_player.chips <= 0 or opponent_player.chips <= 0:
-                    break
-
-                # Track if this is preflop
-                is_preflop = True
-
-                # Reset for new hand
-                game.deck.reset()
-                game.community_cards = []
-                game.pot = 0
-                game.current_bet = 0
-
-                for player in game.players:
-                    player.reset_hand()
-
-                # Deal cards
-                for player in game.players:
-                    if player.chips > 0:
-                        player.hand = game.deck.draw(2)
-
-                # Post blinds
-                game.pot += game.players[0].bet(min(10, game.players[0].chips))
-                game.pot += game.players[1].bet(min(20, game.players[1].chips))
-                game.current_bet = 20
-
-                # Play betting rounds
-                for street in ['preflop', 'flop', 'turn', 'river']:
-                    if street == 'flop':
-                        game.community_cards.extend(game.deck.draw(3))
-                        is_preflop = False
-                    elif street == 'turn':
-                        game.community_cards.append(game.deck.draw())
-                    elif street == 'river':
-                        game.community_cards.append(game.deck.draw())
-
-                    # Simple betting round
-                    for _ in range(2):  # Max 2 actions per player per street
-                        for player_idx, player in enumerate(game.players):
-                            if player.folded or player.chips == 0:
-                                continue
-
-                            # Get valid actions
-                            valid_actions = []
-                            if player.current_bet < game.current_bet:
-                                valid_actions.extend([Action.FOLD, Action.CALL])
-                                if player.chips > game.current_bet - player.current_bet:
-                                    valid_actions.append(Action.RAISE)
-                            else:
-                                valid_actions.extend([Action.CHECK])
-                                if player.chips > 0:
-                                    valid_actions.append(Action.RAISE)
-
-                            if player.chips > 0:
-                                valid_actions.append(Action.ALL_IN)
-
-                            # Get action from AI
-                            if player == test_player:
-                                # Create state for the AI
-                                state = ai_model.get_state_features(
-                                    player.hand, game.community_cards, game.pot,
-                                    game.current_bet, player.chips, player.current_bet,
-                                    2, sum(1 for p in game.players if not p.folded),
-                                    player_idx, [], None,
-                                    hand_phase=0 if street == 'preflop' else (1 if street == 'flop' else (2 if street == 'turn' else 3))
-                                )
-
-                                action = ai_model.choose_action(state, valid_actions, training=False)
-
-                                # Track action
-                                stats['action_counts'][action] += 1
-                                if is_preflop:
-                                    stats['preflop_actions'][action] += 1
-                                else:
-                                    stats['postflop_actions'][action] += 1
-
-                                # Execute action
-                                if action == Action.FOLD:
-                                    player.folded = True
-                                elif action == Action.CALL:
-                                    call_amount = min(game.current_bet - player.current_bet, player.chips)
-                                    game.pot += player.bet(call_amount)
-                                elif action == Action.RAISE:
-                                    raise_amount = ai_model.get_raise_size(
-                                        state, game.pot, game.current_bet,
-                                        player.chips, player.current_bet, 20
-                                    )
-                                    total_bet = min(game.current_bet - player.current_bet + raise_amount, player.chips)
-                                    game.pot += player.bet(total_bet)
-                                    game.current_bet = player.current_bet
-                                elif action == Action.ALL_IN:
-                                    game.pot += player.bet(player.chips)
-                                    if player.current_bet > game.current_bet:
-                                        game.current_bet = player.current_bet
-                            else:
-                                # Opponent plays
-                                if hasattr(opponent_player.ai_model, 'get_state_features'):
-                                    # Use opponent AI with full state features
-                                    state = opponent_player.ai_model.get_state_features(
-                                        player.hand, game.community_cards, game.pot,
-                                        game.current_bet, player.chips, player.current_bet,
-                                        2, sum(1 for p in game.players if not p.folded),
-                                        player_idx, [], None
-                                    )
-                                    action = opponent_player.ai_model.choose_action(state, valid_actions, training=False)
-                                elif hasattr(opponent_player.ai_model, 'choose_action'):
-                                    # Simple AI without state features
-                                    action = opponent_player.ai_model.choose_action(None, valid_actions)
-                                else:
-                                    # Random fallback
-                                    action = np.random.choice(valid_actions)
-
-                                # Execute opponent action (simplified)
-                                if action == Action.FOLD:
-                                    player.folded = True
-                                elif action == Action.CALL:
-                                    call_amount = min(game.current_bet - player.current_bet, player.chips)
-                                    game.pot += player.bet(call_amount)
-                                elif action == Action.CHECK:
-                                    pass
-                                elif action == Action.RAISE:
-                                    raise_amount = 40  # Fixed raise for opponent
-                                    total_bet = min(game.current_bet - player.current_bet + raise_amount, player.chips)
-                                    game.pot += player.bet(total_bet)
-                                    game.current_bet = player.current_bet
-                                elif action == Action.ALL_IN:
-                                    game.pot += player.bet(player.chips)
-                                    if player.current_bet > game.current_bet:
-                                        game.current_bet = player.current_bet
-
-                    # Check if hand is over
-                    active = [p for p in game.players if not p.folded]
-                    if len(active) <= 1:
-                        break
-
-                # Determine winner with proper hand evaluation
-                active = [p for p in game.players if not p.folded]
-                if len(active) == 1:
-                    winner = active[0]
-                    winner.chips += game.pot
-                else:
-                    # Proper showdown - evaluate hands
-                    best_value = -1
-                    winners = []
-
-                    for player in active:
-                        if player.hand and game.community_cards:
-                            all_cards = player.hand + game.community_cards
-                            hand_value = evaluate_hand(all_cards)
-
-                            if hand_value > best_value:
-                                best_value = hand_value
-                                winners = [player]
-                            elif hand_value == best_value:
-                                winners.append(player)
-
-                    # Split pot among winners
-                    if winners:
-                        split_pot = game.pot // len(winners)
-                        remainder = game.pot % len(winners)
-
-                        for i, winner in enumerate(winners):
-                            if i < remainder:
-                                winner.chips += split_pot + 1
-                            else:
-                                winner.chips += split_pot
-
-                hands_this_game += 1
-                total_hands += 1
-
-            # Record game results
-            stats['games_played'] += 1
-            stats['hands_played'] += hands_this_game
-
-            if test_player.chips > opponent_player.chips:
-                stats['wins'] += 1
-
-            if test_player.chips > 0:
-                survived_games += 1
-
-            stats['total_chips_won'] += (test_player.chips - starting_chips)
-
-        # Calculate final statistics
-        if stats['games_played'] > 0:
-            stats['win_rate'] = stats['wins'] / stats['games_played']
-            stats['survival_rate'] = survived_games / stats['games_played']
-            stats['avg_bb_per_hand'] = stats['total_chips_won'] / max(1, total_hands) / 20  # 20 = big blind
-
-        # Calculate action distribution
-        total_actions = sum(stats['action_counts'].values())
-        if total_actions > 0:
-            stats['action_distribution'] = {
-                action.name: count / total_actions
-                for action, count in stats['action_counts'].items()
-            }
-
-        # Calculate preflop/postflop distributions
-        preflop_total = sum(stats['preflop_actions'].values())
-        if preflop_total > 0:
-            stats['preflop_distribution'] = {
-                action.name: count / preflop_total
-                for action, count in stats['preflop_actions'].items()
-            }
-
-        postflop_total = sum(stats['postflop_actions'].values())
-        if postflop_total > 0:
-            stats['postflop_distribution'] = {
-                action.name: count / postflop_total
-                for action, count in stats['postflop_actions'].items()
-            }
-
-        stats['opponent_type'] = opponent_type
 
         return stats
 
@@ -383,9 +112,6 @@ class BulkRewardEvaluator:
         """Evaluate all models in the directory"""
         print(f"\n{'='*80}")
         print("BULK EVALUATION OF REWARD-BASED AI MODELS")
-        print(f"{'='*80}")
-        print(f"Models directory: {self.models_dir}")
-        print(f"Games per model: {num_games}")
         print(f"{'='*80}\n")
 
         # Find all model files
@@ -394,22 +120,30 @@ class BulkRewardEvaluator:
 
         if not model_files:
             print(f"No models found in {self.models_dir}")
-            return
+            return []
 
-        print(f"Found {len(model_files)} models to evaluate\n")
+        print(f"Found {len(model_files)} models to evaluate")
+        print(f"Each model will play {num_games} games total:")
+        print(f"  - {num_games // 2} vs Random opponents")
+        print(f"  - {num_games // 2} vs DQN pool (tuned_ai_v2, tuned_ai_v4, poker_ai_tuned)")
+        print()
 
-        # Evaluate each model
         all_results = []
         start_time = time.time()
 
         for i, model_path in enumerate(model_files, 1):
-            print(f"[{i}/{len(model_files)}] Processing {os.path.basename(model_path)}...")
-            result = self.evaluate_model(model_path, num_games)
-            all_results.append(result)
-            print()
+            model_name = os.path.basename(model_path)
+            print(f"[{i}/{len(model_files)}] {model_name}")
 
-        # Print summary report
-        self.print_summary_report(all_results)
+            result = self.evaluate_model(model_path, num_games, verbose=False)
+            all_results.append(result)
+
+            if result['status'] == 'success':
+                print(f"  ✓ Win rate: {result['win_rate']*100:.1f}% overall "
+                      f"(Random: {result['win_rate_vs_random']*100:.1f}%, "
+                      f"DQN: {result['win_rate_vs_dqn']*100:.1f}%)")
+            else:
+                print(f"  ✗ {result.get('error', 'Unknown error')}")
 
         elapsed = time.time() - start_time
         print(f"\nTotal evaluation time: {elapsed:.1f} seconds")
@@ -421,8 +155,8 @@ class BulkRewardEvaluator:
         print(f"\n{'='*80}")
         print("EVALUATION SUMMARY REPORT")
         print(f"{'='*80}\n")
-        print("Note: Evaluation uses a pool of DQN opponents (tuned_ai_v2, tuned_ai_v4, poker_ai_tuned)")
-        print("      Results should now match post-training evaluation metrics\n")
+        print("Note: Models play full games until elimination (matching post-training evaluation)")
+        print("      Win rates should now accurately reflect model performance\n")
 
         # Separate compatible and incompatible models
         compatible = [r for r in results if r['status'] == 'success']
@@ -438,119 +172,37 @@ class BulkRewardEvaluator:
             print("No compatible models found.")
             return
 
-        # Sort by win rate
+        # Sort by combined win rate
         compatible.sort(key=lambda x: x.get('win_rate', 0), reverse=True)
 
         # Performance table
         print("PERFORMANCE METRICS:")
-        print(f"{'Model':<30} {'Win Rate':>10} {'BB/Hand':>10} {'Survival':>10} {'Games':>8}")
-        print("-" * 70)
+        print(f"{'Model':<30} {'Overall':>10} {'vs Random':>12} {'vs DQN':>10} {'BB/Hand':>10}")
+        print("-" * 75)
 
         for r in compatible:
             print(f"{r['model_name'][:30]:<30} "
                   f"{r.get('win_rate', 0)*100:>9.1f}% "
-                  f"{r.get('avg_bb_per_hand', 0):>10.2f} "
-                  f"{r.get('survival_rate', 0)*100:>9.1f}% "
-                  f"{r.get('games_played', 0):>8}")
+                  f"{r.get('win_rate_vs_random', 0)*100:>11.1f}% "
+                  f"{r.get('win_rate_vs_dqn', 0)*100:>9.1f}% "
+                  f"{r.get('bb_per_hand', 0):>9.3f}")
 
-        # Action distribution table
-        print(f"\n{'='*80}")
-        print("ACTION DISTRIBUTIONS (Overall):")
-        print(f"{'Model':<30} {'FOLD':>10} {'CHECK':>10} {'CALL':>10} {'RAISE':>10} {'ALL_IN':>10}")
-        print("-" * 80)
-
-        for r in compatible:
-            dist = r.get('action_distribution', {})
-            print(f"{r['model_name'][:30]:<30} "
-                  f"{dist.get('FOLD', 0)*100:>9.1f}% "
-                  f"{dist.get('CHECK', 0)*100:>9.1f}% "
-                  f"{dist.get('CALL', 0)*100:>9.1f}% "
-                  f"{dist.get('RAISE', 0)*100:>9.1f}% "
-                  f"{dist.get('ALL_IN', 0)*100:>9.1f}%")
-
-        # Preflop vs Postflop comparison for top models
-        print(f"\n{'='*80}")
-        print("PREFLOP VS POSTFLOP BEHAVIOR (Top 5 Models):")
-        print("-" * 80)
-
-        for r in compatible[:5]:
-            print(f"\n{r['model_name']}:")
-
-            pre_dist = r.get('preflop_distribution', {})
-            if pre_dist:
-                print("  Preflop:  ", end="")
-                for action in ['FOLD', 'CALL', 'RAISE', 'ALL_IN']:
-                    if action in pre_dist:
-                        print(f"{action}: {pre_dist[action]*100:.1f}%  ", end="")
-                print()
-
-            post_dist = r.get('postflop_distribution', {})
-            if post_dist:
-                print("  Postflop: ", end="")
-                for action in ['FOLD', 'CHECK', 'CALL', 'RAISE', 'ALL_IN']:
-                    if action in post_dist:
-                        print(f"{action}: {post_dist[action]*100:.1f}%  ", end="")
-                print()
+        # Action distribution for top models
+        print("\nACTION DISTRIBUTIONS (Top 3 Models):")
+        for i, r in enumerate(compatible[:3]):
+            if 'action_distribution' in r and r['action_distribution']:
+                print(f"\n{r['model_name']}:")
+                for action, freq in sorted(r['action_distribution'].items()):
+                    print(f"  {action:8s}: {freq*100:5.1f}%")
 
         # Summary statistics
-        print(f"\n{'='*80}")
-        print("OVERALL STATISTICS:")
-        print(f"  Total models evaluated: {len(compatible)}")
-        print(f"  Incompatible models: {len(incompatible)}")
-
         if compatible:
             avg_win_rate = np.mean([r.get('win_rate', 0) for r in compatible])
-            avg_bb = np.mean([r.get('avg_bb_per_hand', 0) for r in compatible])
-            avg_all_in = np.mean([r.get('action_distribution', {}).get('ALL_IN', 0) for r in compatible])
+            avg_win_vs_random = np.mean([r.get('win_rate_vs_random', 0) for r in compatible])
+            avg_win_vs_dqn = np.mean([r.get('win_rate_vs_dqn', 0) for r in compatible])
 
-            print(f"  Average win rate: {avg_win_rate*100:.1f}%")
-            print(f"  Average BB/hand: {avg_bb:.2f}")
-            print(f"  Average all-in rate: {avg_all_in*100:.1f}%")
-
-            # Find best and worst performers
-            best_model = compatible[0]
-            worst_model = compatible[-1]
-
-            print(f"\n  Best performer: {best_model['model_name']} ({best_model.get('win_rate', 0)*100:.1f}% win rate)")
-            print(f"  Worst performer: {worst_model['model_name']} ({worst_model.get('win_rate', 0)*100:.1f}% win rate)")
-
-
-def main():
-    """Run bulk evaluation"""
-    evaluator = BulkRewardEvaluator()
-
-    # Check if models directory exists
-    if not os.path.exists(evaluator.models_dir):
-        print(f"Creating models directory: {evaluator.models_dir}")
-        os.makedirs(evaluator.models_dir, exist_ok=True)
-        print("No models found to evaluate. Train some models first!")
-        return
-
-    # Run evaluation
-    results = evaluator.evaluate_all_models(num_games=50)
-
-    # Optionally save results to file
-    save_choice = input("\nSave results to file? (y/n): ")
-    if save_choice.lower() == 'y':
-        import json
-        filename = f"reward_evaluation_{time.strftime('%Y%m%d_%H%M%S')}.json"
-
-        # Convert defaultdicts to regular dicts for JSON serialization
-        for r in results:
-            if 'action_counts' in r:
-                r['action_counts'] = {k.name if hasattr(k, 'name') else str(k): v
-                                     for k, v in r['action_counts'].items()}
-            if 'preflop_actions' in r:
-                r['preflop_actions'] = {k.name if hasattr(k, 'name') else str(k): v
-                                       for k, v in r['preflop_actions'].items()}
-            if 'postflop_actions' in r:
-                r['postflop_actions'] = {k.name if hasattr(k, 'name') else str(k): v
-                                        for k, v in r['postflop_actions'].items()}
-
-        with open(filename, 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {filename}")
-
-
-if __name__ == "__main__":
-    main()
+            print(f"\n{'='*75}")
+            print(f"AVERAGE PERFORMANCE:")
+            print(f"  Overall win rate:      {avg_win_rate*100:.1f}%")
+            print(f"  Win rate vs Random:    {avg_win_vs_random*100:.1f}%")
+            print(f"  Win rate vs DQN:       {avg_win_vs_dqn*100:.1f}%")
