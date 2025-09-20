@@ -38,6 +38,12 @@ class RewardBasedTrainer:
         self.win_rates = []
         self.bb_per_hand = []
 
+        # Fold tracking for penalty
+        self.recent_folds = []  # Track last N hands for fold rate
+        self.fold_window_size = 100  # Window for calculating fold rate
+        self.excessive_fold_threshold = 0.75  # Penalty if folding > 75%
+        self.fold_penalty = -1.0  # Penalty in BBs for excessive folding
+
         # Opponent models for mixed training
         self.opponent_models = []
         self._load_opponent_models()
@@ -85,17 +91,21 @@ class RewardBasedTrainer:
         total_bb_won = 0
         hands_per_update = []
         total_all_ins = 0  # Track all-in frequency
+        total_folds = 0  # Track fold frequency
 
         for hand_idx in range(num_hands):
-            # Track all-ins for this hand
+            # Track all-ins and folds for this hand
             self._current_training_all_ins = 0
+            self._current_training_folded = False
 
             # Play a hand and collect experiences
             hand_reward_bb, won = self.simulate_hand(hand_idx)
 
-            # Update total all-in tracking
+            # Update total all-in and fold tracking
             if self._current_training_all_ins > 0:
                 total_all_ins += 1
+            if self._current_training_folded:
+                total_folds += 1
 
             # Track statistics
             total_bb_won += hand_reward_bb
@@ -119,12 +129,14 @@ class RewardBasedTrainer:
                 win_rate = (wins / (hand_idx + 1)) * 100
                 avg_bb = total_bb_won / (hand_idx + 1)
                 all_in_rate = (total_all_ins / (hand_idx + 1)) * 100
+                fold_rate = (total_folds / (hand_idx + 1)) * 100
                 elapsed = time.time() - start_time
                 hands_per_sec = (hand_idx + 1) / elapsed
 
                 print(f"Hands: {hand_idx + 1}/{num_hands} | "
                       f"Win Rate: {win_rate:.1f}% | "
                       f"Avg BB/hand: {avg_bb:+.2f} | "
+                      f"Fold: {fold_rate:.1f}% | "
                       f"All-in: {all_in_rate:.1f}% | "
                       f"Speed: {hands_per_sec:.1f} hands/sec")
 
@@ -159,8 +171,9 @@ class RewardBasedTrainer:
         """Simulate a single hand and return reward in big blinds"""
         game = TexasHoldEmTraining(num_players=self.num_players)
 
-        # Track all-ins for penalty
+        # Track all-ins and folds for penalty/bonus
         our_all_in_count = 0
+        our_player_folded = False
 
         # Setup players first, before reset
         players = []
@@ -265,11 +278,27 @@ class RewardBasedTrainer:
             all_in_penalty = 0.5 * our_all_in_count  # -0.5 BB per all-in
             reward_bb -= all_in_penalty
 
+        # Track folding behavior
+        self.recent_folds.append(1 if our_player_folded else 0)
+        if len(self.recent_folds) > self.fold_window_size:
+            self.recent_folds.pop(0)
+
+        # Apply penalty for excessive folding
+        if len(self.recent_folds) >= 20:  # Need some history before applying penalty
+            recent_fold_rate = sum(self.recent_folds) / len(self.recent_folds)
+            if recent_fold_rate > self.excessive_fold_threshold:
+                # Penalty proportional to how much over the threshold
+                excess_folding = recent_fold_rate - self.excessive_fold_threshold
+                fold_penalty = self.fold_penalty * excess_folding * 4  # Scale penalty
+                reward_bb += fold_penalty  # Negative penalty reduces reward
+
         won = our_player in winners
 
-        # Update tracking (add all-in count to parent method's tracking)
+        # Update tracking (add all-in and fold counts to parent method's tracking)
         if hasattr(self, '_current_training_all_ins'):
             self._current_training_all_ins += our_all_in_count
+        if hasattr(self, '_current_training_folded'):
+            self._current_training_folded = our_player_folded
 
 
         # Store experience with reward
@@ -305,6 +334,7 @@ class RewardBasedTrainer:
             return 0
 
         our_all_ins = 0  # Track our player's all-ins
+        our_player_folded = False  # Track if our player folded
 
         num_active_players = len(game.players)
         first_to_act = (game.dealer_position + 3) % num_active_players if street_idx == 0 \
@@ -358,9 +388,12 @@ class RewardBasedTrainer:
             old_bet = player.current_bet
             self.execute_action(game, player, action)
 
-            # Track if our player went all-in
-            if player == game.players[0] and action == Action.ALL_IN:
-                our_all_ins += 1
+            # Track if our player went all-in or folded
+            if player == game.players[0]:
+                if action == Action.ALL_IN:
+                    our_all_ins += 1
+                elif action == Action.FOLD:
+                    our_player_folded = True
 
             # Store experience
             if hasattr(player.ai_model, 'remember') and player == game.players[0]:
@@ -400,6 +433,10 @@ class RewardBasedTrainer:
                 break
 
             current = (current + 1) % num_active_players
+
+        # Update tracking for our player's folding
+        if our_player_folded and hasattr(self, '_current_training_folded'):
+            self._current_training_folded = True
 
         return our_all_ins
 
