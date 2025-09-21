@@ -502,15 +502,13 @@ def main():
         use_progressive = input("\nUse progressive stack variation? (y/n, default: y): ")
         use_progressive = use_progressive.lower() != 'n'  # Default to yes
 
-        if use_progressive and num_players == 2:
+        if use_progressive:
             print("\nProgressive stacks enabled:")
-            print("  - Starting with uniform stacks (1000/1000)")
+            print(f"  - Starting with uniform stacks ({1000}x{num_players} = {1000*num_players} total chips)")
             print("  - Gradually increasing variation over 75% of training")
-            print("  - Total chips fixed at 2000 for stability")
-        elif use_progressive:
-            print("\nNote: Progressive stacks only supported for 2 players")
-            print("Using standard random stack variation")
-            use_progressive = False
+            print(f"  - Total chips fixed at {1000*num_players} for stability")
+            if num_players > 2:
+                print("  - Scenarios: chip leader, short stacks, and random variations")
         else:
             print("\nUsing random stack variation throughout training")
 

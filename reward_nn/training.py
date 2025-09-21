@@ -87,9 +87,9 @@ class RewardBasedTrainer:
             print(f"Training Reward-Based AI for {num_hands} hands...")
             print(f"Players: {self.num_players}, Big Blind: ${self.big_blind}")
             if self.variable_stacks:
-                if self.progressive_stacks and self.num_players == 2:
+                if self.progressive_stacks:
                     print(f"Progressive Stacks: Starting uniform, increasing variation over time")
-                    print(f"Total chips fixed at 2000 for stability")
+                    print(f"Total chips fixed at {1000 * self.num_players} for stability")
                 else:
                     print(f"Variable Stacks: {self.min_stack_bb}-{self.max_stack_bb} BBs")
             else:
@@ -214,17 +214,10 @@ class RewardBasedTrainer:
             # Fixed stacks for all players
             return [self.starting_chips] * self.num_players
 
-        if self.num_players != 2:
-            # For non-2-player games, use old random logic
-            stacks = []
-            for i in range(self.num_players):
-                stack_bbs = random.randint(self.min_stack_bb, self.max_stack_bb)
-                stacks.append(stack_bbs * self.big_blind)
-            return stacks
+        # Total chips scales with number of players
+        total_chips = 1000 * self.num_players
 
-        # For 2-player games with progressive stacks
-        total_chips = 2000  # Fixed total for stability
-
+        # Calculate progress for progressive variation
         if self.progressive_stacks and self.total_training_hands:
             # Progressive variation based on training progress
             # Full variation after 75% of training
@@ -236,38 +229,190 @@ class RewardBasedTrainer:
         else:
             progress = 1.0  # Full variation immediately if not progressive
 
-        # Determine stack scenario based on hand index
-        scenario_cycle = hand_idx % 100  # Cycle through scenarios
+        # For 2 players, use the original logic
+        if self.num_players == 2:
+            # Determine stack scenario based on hand index
+            scenario_cycle = hand_idx % 100  # Cycle through scenarios
 
-        if scenario_cycle < 25 or progress < 0.1:
-            # Uniform stacks (first 25% of cycle or very early training)
-            stack1 = total_chips // 2
-            stack2 = total_chips - stack1
-        elif scenario_cycle < 50:
-            # Small stack vs big stack scenario
-            # Variation increases with progress
-            variation = int(400 * progress)  # Max 400 chip difference
-            stack1 = (total_chips // 2) - variation
-            stack2 = total_chips - stack1
-        elif scenario_cycle < 75:
-            # Medium variation scenario
-            variation = int(200 * progress)  # Max 200 chip difference
-            if random.random() < 0.5:
-                stack1 = (total_chips // 2) + variation
+            if scenario_cycle < 25 or progress < 0.1:
+                # Uniform stacks (first 25% of cycle or very early training)
+                stack1 = total_chips // 2
                 stack2 = total_chips - stack1
-            else:
+            elif scenario_cycle < 50:
+                # Small stack vs big stack scenario
+                # Variation increases with progress
+                variation = int(400 * progress)  # Max 400 chip difference
                 stack1 = (total_chips // 2) - variation
                 stack2 = total_chips - stack1
-        else:
-            # Random variation (but controlled by progress)
-            max_variation = int(600 * progress)  # Max 600 chip difference
-            variation = random.randint(-max_variation, max_variation) if max_variation > 0 else 0
-            stack1 = (total_chips // 2) + variation
-            # Ensure minimum stack size
-            stack1 = max(200, min(1800, stack1))  # At least 10BB, at most 90BB
-            stack2 = total_chips - stack1
+            elif scenario_cycle < 75:
+                # Medium variation scenario
+                variation = int(200 * progress)  # Max 200 chip difference
+                if random.random() < 0.5:
+                    stack1 = (total_chips // 2) + variation
+                    stack2 = total_chips - stack1
+                else:
+                    stack1 = (total_chips // 2) - variation
+                    stack2 = total_chips - stack1
+            else:
+                # Random variation (but controlled by progress)
+                max_variation = int(600 * progress)  # Max 600 chip difference
+                variation = random.randint(-max_variation, max_variation) if max_variation > 0 else 0
+                stack1 = (total_chips // 2) + variation
+                # Ensure minimum stack size
+                stack1 = max(200, min(1800, stack1))  # At least 10BB, at most 90BB
+                stack2 = total_chips - stack1
 
-        return [stack1, stack2]
+            return [stack1, stack2]
+
+        # For 3+ players, implement progressive variation
+        else:
+            avg_stack = total_chips // self.num_players
+            min_stack = int(avg_stack * 0.2)  # Minimum 20% of average
+
+            # Maximum possible stack (leaving minimum for others)
+            theoretical_max = total_chips - (min_stack * (self.num_players - 1))
+
+            scenario_cycle = hand_idx % 100  # Cycle through scenarios
+
+            if scenario_cycle < 25 or progress < 0.1:
+                # Uniform stacks early in training
+                return [avg_stack] * self.num_players
+
+            elif scenario_cycle < 50:
+                # Chip leader vs others scenario with exponentially decreasing probability for extreme stacks
+                stacks = []
+
+                # Determine leader stack size with exponential distribution
+                # Use random to determine how extreme the chip leader is
+                extremeness = random.random()  # 0 to 1
+
+                if extremeness < 0.5:
+                    # 50% chance: moderate chip leader (1.5-2.5x average)
+                    leader_multiplier = 1.5 + random.random() * 1.0 * progress
+                elif extremeness < 0.8:
+                    # 30% chance: strong chip leader (2.5-4x average)
+                    leader_multiplier = 2.5 + random.random() * 1.5 * progress
+                elif extremeness < 0.95:
+                    # 15% chance: dominant chip leader (4-6x average)
+                    leader_multiplier = 4.0 + random.random() * 2.0 * progress
+                else:
+                    # 5% chance: extreme chip leader (6x-near max)
+                    # For 6 players, this could be up to ~80% of all chips
+                    leader_multiplier = 6.0 + random.random() * (theoretical_max / avg_stack - 6.0) * progress
+
+                leader_chips = int(avg_stack * leader_multiplier)
+                leader_chips = min(leader_chips, theoretical_max)
+                leader_chips = max(leader_chips, avg_stack)  # At least average
+                stacks.append(leader_chips)
+
+                # Distribute remaining chips among other players
+                remaining_chips = total_chips - leader_chips
+                remaining_players = self.num_players - 1
+
+                for i in range(remaining_players):
+                    if i == remaining_players - 1:
+                        # Last player gets whatever is left
+                        stacks.append(remaining_chips)
+                    else:
+                        # Random variation for middle stacks
+                        avg_remaining = remaining_chips / (remaining_players - i)
+                        variation_factor = 0.3 * progress
+                        stack = int(avg_remaining * random.uniform(1 - variation_factor, 1 + variation_factor))
+                        stack = max(min_stack, min(stack, remaining_chips - min_stack * (remaining_players - i - 1)))
+                        stacks.append(stack)
+                        remaining_chips -= stack
+
+                random.shuffle(stacks)  # Randomize positions
+                return stacks
+
+            elif scenario_cycle < 75:
+                # Short stack vs medium stacks scenario (including extreme short stack scenarios)
+                stacks = []
+
+                # Occasionally create extreme scenarios where AI is very short
+                short_extremeness = random.random()
+
+                if short_extremeness < 0.1 and progress > 0.5:
+                    # 10% chance: AI gets very short stack (10-20% of average)
+                    num_short = 1
+                    short_stack = int(avg_stack * (0.1 + 0.1 * random.random()))
+                    short_stack = max(min_stack, short_stack)
+                    stacks.append(short_stack)
+                else:
+                    # Normal short stack scenario
+                    num_short = min(2, self.num_players - 1)
+                    for _ in range(num_short):
+                        short_stack = int(avg_stack * (0.3 + 0.3 * (1 - progress)))  # 30-60% of average
+                        short_stack = max(min_stack, short_stack)
+                        stacks.append(short_stack)
+
+                # Distribute remaining chips among other players
+                remaining_chips = total_chips - sum(stacks)
+                remaining_players = self.num_players - num_short
+
+                for i in range(remaining_players):
+                    if i == remaining_players - 1:
+                        stacks.append(remaining_chips)
+                    else:
+                        avg_remaining = remaining_chips / (remaining_players - i)
+                        # Add some variation
+                        stack = int(avg_remaining * random.uniform(0.7, 1.3))
+                        stack = max(min_stack, min(stack, remaining_chips - min_stack * (remaining_players - i - 1)))
+                        stacks.append(stack)
+                        remaining_chips -= stack
+
+                random.shuffle(stacks)  # Randomize positions
+                return stacks
+
+            else:
+                # Random variation scenario with possibility of extreme stacks
+                stacks = []
+                remaining_chips = total_chips
+
+                # Small chance for extreme random distributions
+                if random.random() < 0.05 and progress > 0.5:
+                    # 5% chance: Create one very large stack randomly
+                    extreme_multiplier = 3.0 + random.random() * (theoretical_max / avg_stack - 3.0) * 0.7
+                    extreme_stack = int(avg_stack * extreme_multiplier)
+                    extreme_stack = min(extreme_stack, theoretical_max)
+                    extreme_position = random.randint(0, self.num_players - 1)
+
+                    for i in range(self.num_players):
+                        if i == extreme_position:
+                            stacks.append(extreme_stack)
+                            remaining_chips -= extreme_stack
+                        elif i == self.num_players - 1:
+                            stacks.append(remaining_chips)
+                        else:
+                            avg_remaining = remaining_chips / (self.num_players - len(stacks))
+                            stack = int(avg_remaining * random.uniform(0.5, 1.5))
+                            stack = max(min_stack, min(stack, remaining_chips - min_stack * (self.num_players - len(stacks) - 1)))
+                            stacks.append(stack)
+                            remaining_chips -= stack
+                else:
+                    # Normal random distribution
+                    for i in range(self.num_players):
+                        if i == self.num_players - 1:
+                            # Last player gets whatever is left
+                            stacks.append(remaining_chips)
+                        else:
+                            # Random stack with progressive variation
+                            avg_remaining = remaining_chips / (self.num_players - i)
+                            variation_range = 0.6 * progress  # Up to 60% variation when fully progressed
+
+                            stack = int(avg_remaining * random.uniform(1 - variation_range, 1 + variation_range))
+                            # Allow stacks to go higher but with decreasing probability
+                            if random.random() < 0.1:  # 10% chance for larger variation
+                                stack = int(stack * random.uniform(1.0, 1.5))
+
+                            # Ensure we don't violate minimum constraints
+                            max_allowed = remaining_chips - min_stack * (self.num_players - i - 1)
+                            stack = max(min_stack, min(stack, max_allowed))
+
+                            stacks.append(stack)
+                            remaining_chips -= stack
+
+                return stacks
 
     def simulate_hand(self, hand_idx: int) -> Tuple[float, bool]:
         """Simulate a single hand and return reward in big blinds"""
