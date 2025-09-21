@@ -579,12 +579,15 @@ class RewardBasedTrainer:
         # Determine winner and calculate reward
         winners = self.determine_winners(game)
         our_player = game.players[0]
-        won = our_player in winners
 
         # Calculate reward in big blinds
         final_chips = our_player.chips
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
+
+        # Define "won" as actually gaining chips, not just being in winners list
+        # This is more meaningful for training, especially with side pots
+        won = chips_won > 0
 
         # Apply moderate penalty for all-ins to discourage over-aggressive play
         # But not so harsh that it creates perverse incentives
@@ -595,13 +598,13 @@ class RewardBasedTrainer:
             # Penalty based on when the all-in happened
             # Preflop all-ins get maximum penalty (but reduced from before)
             if len(game.community_cards) == 0:  # Preflop all-in
-                all_in_penalty = 2.0 * our_all_in_count * stack_size_factor
+                all_in_penalty = 10.0 * our_all_in_count * stack_size_factor
             elif len(game.community_cards) == 3:  # Flop all-in
-                all_in_penalty = 1.5 * our_all_in_count * stack_size_factor
+                all_in_penalty = 7.5 * our_all_in_count * stack_size_factor
             elif len(game.community_cards) == 4:  # Turn all-in
-                all_in_penalty = 1.0 * our_all_in_count * stack_size_factor
+                all_in_penalty = 5.0 * our_all_in_count * stack_size_factor
             else:  # River all-in
-                all_in_penalty = 0.5 * our_all_in_count * stack_size_factor
+                all_in_penalty = 2 * our_all_in_count * stack_size_factor
 
             # Only apply penalty if we lost or if we won with a weak hand
             # This prevents penalizing legitimate all-ins with strong hands
@@ -661,17 +664,20 @@ class RewardBasedTrainer:
                 # More recent actions get slightly more credit/blame
                 decay_factor = 0.95
 
-                for i, (state, action, next_state, _) in enumerate(self.hand_experiences):
+                for i, (state, action, next_state, _, immediate) in enumerate(self.hand_experiences):
                     # Calculate decayed reward (most recent action gets full reward)
                     steps_from_end = num_experiences - i - 1
                     decayed_reward = reward_bb * (decay_factor ** steps_from_end)
+
+                    # Add immediate shaping reward
+                    total_reward = decayed_reward + immediate
 
                     # Last experience in hand is terminal
                     is_terminal = (i == num_experiences - 1)
 
                     # Store the experience with the appropriately attributed reward
                     our_player.ai_model.remember(
-                        state, action, decayed_reward,
+                        state, action, total_reward,
                         next_state if not is_terminal else None,
                         is_terminal
                     )
@@ -767,12 +773,22 @@ class RewardBasedTrainer:
                     current, game.action_history[-10:], next_opponent_info, hand_phase=street_idx
                 )
 
-                # DON'T store experience yet - we'll update all experiences with the final reward
-                # Instead, track the experience for later update
+                # Track experience for later update with final reward
                 if not hasattr(self, 'hand_experiences'):
                     self.hand_experiences = []
 
-                self.hand_experiences.append((state, action, next_state, False))
+                # Add immediate shaping reward for all-ins (negative to discourage)
+                immediate_reward = 0
+                if action == Action.ALL_IN:
+                    # Immediate negative feedback for all-ins, especially preflop
+                    if len(game.community_cards) == 0:  # Preflop
+                        immediate_reward = -0.5
+                    elif len(game.community_cards) == 3:  # Flop
+                        immediate_reward = -0.3
+                    else:  # Turn/River
+                        immediate_reward = -0.1
+
+                self.hand_experiences.append((state, action, next_state, False, immediate_reward))
 
             # Update tracking
             game.action_history.append(action)
