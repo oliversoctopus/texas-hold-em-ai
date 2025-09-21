@@ -272,9 +272,9 @@ class RewardBasedNN(nn.Module):
 class RewardBasedAI:
     """Main AI class using reward-based learning"""
 
-    def __init__(self, learning_rate: float = 3e-4, gamma: float = 0.99,
-                 clip_epsilon: float = 0.2, value_coef: float = 0.5,
-                 entropy_coef: float = 0.01, hidden_dim: int = 256):
+    def __init__(self, learning_rate: float = 1e-4, gamma: float = 0.99,
+                 clip_epsilon: float = 0.1, value_coef: float = 0.5,
+                 entropy_coef: float = 0.1, hidden_dim: int = 256):
         """Initialize the reward-based AI"""
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -543,7 +543,7 @@ class RewardBasedAI:
         # Recreate network with correct architecture if needed
         if hidden_dim != self.network.hidden_dim:
             self.network = RewardBasedNN(hidden_dim=hidden_dim).to(self.device)
-            self.optimizer = optim.Adam(self.network.parameters(), lr=3e-4)
+            self.optimizer = optim.Adam(self.network.parameters(), lr=1e-4)
 
         self.network.load_state_dict(checkpoint['network_state'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
@@ -553,6 +553,6 @@ class RewardBasedAI:
         # Load config
         config = checkpoint.get('config', {})
         self.gamma = config.get('gamma', 0.99)
-        self.clip_epsilon = config.get('clip_epsilon', 0.2)
+        self.clip_epsilon = config.get('clip_epsilon', 0.1)
         self.value_coef = config.get('value_coef', 0.5)
-        self.entropy_coef = config.get('entropy_coef', 0.01)
+        self.entropy_coef = config.get('entropy_coef', 0.1)

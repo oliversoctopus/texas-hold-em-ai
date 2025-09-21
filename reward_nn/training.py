@@ -589,6 +589,19 @@ class RewardBasedTrainer:
         # This is more meaningful for training, especially with side pots
         won = chips_won > 0
 
+        # Add survival bonus if we didn't go all-in
+        if our_all_in_count == 0:
+            reward_bb += 0.05  # Small bonus for surviving without all-in
+
+        # Add pot control reward
+        pot_to_stack_ratio = game.pot / initial_chips if initial_chips > 0 else 0
+        if pot_to_stack_ratio < 0.3 and not won:
+            # Kept pot small when we lost (good pot control)
+            reward_bb += 0.1
+        elif pot_to_stack_ratio > 0.5 and won:
+            # Built big pot when we won (good value extraction)
+            reward_bb += 0.2
+
         # Apply moderate penalty for all-ins to discourage over-aggressive play
         # But not so harsh that it creates perverse incentives
         if our_all_in_count > 0:
@@ -777,16 +790,44 @@ class RewardBasedTrainer:
                 if not hasattr(self, 'hand_experiences'):
                     self.hand_experiences = []
 
-                # Add immediate shaping reward for all-ins (negative to discourage)
+                # Add immediate shaping rewards to encourage diverse play
                 immediate_reward = 0
+
                 if action == Action.ALL_IN:
-                    # Immediate negative feedback for all-ins, especially preflop
+                    # Stronger negative feedback for all-ins
                     if len(game.community_cards) == 0:  # Preflop
-                        immediate_reward = -0.5
+                        immediate_reward = -2.0
                     elif len(game.community_cards) == 3:  # Flop
-                        immediate_reward = -0.3
-                    else:  # Turn/River
-                        immediate_reward = -0.1
+                        immediate_reward = -1.5
+                    elif len(game.community_cards) == 4:  # Turn
+                        immediate_reward = -1.0
+                    else:  # River
+                        immediate_reward = -0.5
+
+                elif action == Action.FOLD:
+                    # Small penalty for folding (to prevent excessive folding)
+                    immediate_reward = -0.1
+
+                elif action == Action.CHECK:
+                    # Small reward for checking (pot control)
+                    immediate_reward = 0.1
+
+                elif action == Action.CALL:
+                    # Calculate pot odds
+                    call_amount = game.current_bet - player.current_bet
+                    if call_amount > 0:
+                        pot_odds = call_amount / (game.pot + call_amount)
+                        # Reward good pot odds calls
+                        if pot_odds < 0.3:  # Getting good odds
+                            immediate_reward = 0.2
+                        else:
+                            immediate_reward = 0.05
+                    else:
+                        immediate_reward = 0.1
+
+                elif action == Action.RAISE:
+                    # Reward aggressive play (but not all-in)
+                    immediate_reward = 0.3
 
                 self.hand_experiences.append((state, action, next_state, False, immediate_reward))
 
@@ -822,8 +863,41 @@ class RewardBasedTrainer:
             if player.chips > 0:
                 valid.append(Action.RAISE)
 
+        # Restrict ALL_IN availability to discourage overuse
         if player.chips > 0:
-            valid.append(Action.ALL_IN)
+            # Calculate stack size in big blinds
+            stack_bbs = player.chips / self.big_blind if self.big_blind > 0 else float('inf')
+
+            # Calculate pot odds
+            call_amount = game.current_bet - player.current_bet
+            pot_odds = call_amount / (game.pot + call_amount) if (game.pot + call_amount) > 0 else 0
+
+            # Only allow ALL_IN in specific situations:
+            # 1. Very short stack (< 10 BB)
+            # 2. Facing a large bet that represents > 50% of our stack
+            # 3. On the river (len(community_cards) == 5)
+            # 4. Already pot-committed (> 30% of stack in pot)
+            allow_all_in = False
+
+            if stack_bbs < 10:
+                # Short stack - all-in is reasonable
+                allow_all_in = True
+            elif call_amount > player.chips * 0.5:
+                # Facing large bet relative to stack
+                allow_all_in = True
+            elif len(game.community_cards) == 5:
+                # River - all-in more reasonable
+                allow_all_in = True
+            elif player.total_invested > player.chips * 0.3:
+                # Already pot-committed
+                allow_all_in = True
+
+            # During training, sometimes allow it anyway for exploration (10% chance)
+            if not allow_all_in and hasattr(player, 'ai_model') and np.random.random() < 0.1:
+                allow_all_in = True
+
+            if allow_all_in:
+                valid.append(Action.ALL_IN)
 
         return valid
 
