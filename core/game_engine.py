@@ -958,21 +958,15 @@ class TexasHoldEm:
         # Calculate total contributions to verify against actual pot
         total_contributions = sum(player_contributions.values())
 
-        # If there's a mismatch, we need to handle it
+        # Check if there's a mismatch (there shouldn't be!)
         if total_contributions != total_pot_to_distribute:
-            # This can happen due to rounding or blind posting
-            # Adjust the contributions proportionally to match the actual pot
-            if total_contributions > 0:
-                adjustment_ratio = total_pot_to_distribute / total_contributions
-                for player in player_contributions:
-                    player_contributions[player] = int(player_contributions[player] * adjustment_ratio)
-
-            # Handle any remaining chips due to rounding
-            remaining = total_pot_to_distribute - sum(player_contributions.values())
-            if remaining > 0 and active_players:
-                # Add remaining chips to the player with highest contribution
-                max_contributor = max(active_players, key=lambda p: player_contributions[p])
-                player_contributions[max_contributor] += remaining
+            print(f"\nERROR: Pot mismatch before distribution!")
+            print(f"  Actual pot: ${total_pot_to_distribute}")
+            print(f"  Sum of contributions: ${total_contributions}")
+            print(f"  Difference: ${total_pot_to_distribute - total_contributions}")
+            print(f"  Player contributions:")
+            for player in self.players:
+                print(f"    {player.name}: ${player.total_invested} (current_bet: ${player.current_bet})")
 
         # Create side pots
         side_pots = []
