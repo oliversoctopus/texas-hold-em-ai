@@ -274,7 +274,7 @@ class RewardBasedAI:
 
     def __init__(self, learning_rate: float = 3e-4, gamma: float = 0.99,
                  clip_epsilon: float = 0.2, value_coef: float = 0.5,
-                 entropy_coef: float = 0.01, hidden_dim: int = 256):
+                 entropy_coef: float = 0.05, hidden_dim: int = 256):
         """Initialize the reward-based AI"""
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -586,24 +586,27 @@ class RewardBasedTrainer:
         chips_won = final_chips - initial_chips
         reward_bb = chips_won / self.big_blind
 
-        # Apply stronger penalty for all-ins to discourage over-aggressive play
+        # Apply moderate penalty for all-ins to discourage over-aggressive play
+        # But not so harsh that it creates perverse incentives
         if our_all_in_count > 0:
-            # Much stronger penalty, especially for early all-ins
-            # Base penalty increases with stack size (all-in with big stack = bad)
-            stack_size_factor = initial_stack_bbs / 50  # Normalize by 50BB
+            # Moderate penalty that scales with stack size
+            stack_size_factor = min(1.5, initial_stack_bbs / 50)  # Cap the factor
 
             # Penalty based on when the all-in happened
-            # Preflop all-ins get maximum penalty
+            # Preflop all-ins get maximum penalty (but reduced from before)
             if len(game.community_cards) == 0:  # Preflop all-in
-                all_in_penalty = 10.0 * our_all_in_count * stack_size_factor
-            elif len(game.community_cards) == 3:  # Flop all-in
-                all_in_penalty = 6.0 * our_all_in_count * stack_size_factor
-            elif len(game.community_cards) == 4:  # Turn all-in
-                all_in_penalty = 4.0 * our_all_in_count * stack_size_factor
-            else:  # River all-in
                 all_in_penalty = 2.0 * our_all_in_count * stack_size_factor
+            elif len(game.community_cards) == 3:  # Flop all-in
+                all_in_penalty = 1.5 * our_all_in_count * stack_size_factor
+            elif len(game.community_cards) == 4:  # Turn all-in
+                all_in_penalty = 1.0 * our_all_in_count * stack_size_factor
+            else:  # River all-in
+                all_in_penalty = 0.5 * our_all_in_count * stack_size_factor
 
-            reward_bb -= all_in_penalty
+            # Only apply penalty if we lost or if we won with a weak hand
+            # This prevents penalizing legitimate all-ins with strong hands
+            if not won or (won and our_all_in_count > 1):
+                reward_bb -= all_in_penalty
 
             # Additional penalty for going all-in too frequently
             # Track recent all-ins in a window
@@ -617,7 +620,7 @@ class RewardBasedTrainer:
             if len(self.recent_all_ins) >= 10:
                 all_in_rate = sum(self.recent_all_ins) / len(self.recent_all_ins)
                 if all_in_rate > 0.5:
-                    frequency_penalty = (all_in_rate - 0.5) * 10  # Up to 5 BB extra penalty
+                    frequency_penalty = (all_in_rate - 0.5) * 3  # Reduced penalty
                     reward_bb -= frequency_penalty
         else:
             # Track that we didn't go all-in this hand
@@ -650,29 +653,33 @@ class RewardBasedTrainer:
             self._current_training_folded = our_player_folded
 
 
-        # Store experience with reward
-        if hasattr(our_player.ai_model, 'remember'):
-            # Collect final opponent information
-            final_opponent_info = []
-            for p in game.players:
-                if p != our_player and not p.folded:
-                    final_opponent_info.append({
-                        'chips': p.chips,
-                        'current_bet': p.current_bet,
-                        'all_in': p.all_in
-                    })
+        # Distribute the final reward to ALL actions taken during this hand
+        # This is Monte Carlo return - all actions in a hand share responsibility for the outcome
+        if hasattr(our_player.ai_model, 'remember') and hasattr(self, 'hand_experiences'):
+            num_experiences = len(self.hand_experiences)
 
-            # Create final state
-            final_state = our_player.ai_model.get_state_features(
-                our_player.hand, game.community_cards, game.pot, 0,
-                our_player.chips, 0, num_players, 1, 0,
-                game.action_history, final_opponent_info, hand_phase=3
-            )
+            if num_experiences > 0:
+                # Distribute reward with slight decay for earlier actions
+                # More recent actions get slightly more credit/blame
+                decay_factor = 0.95
 
-            # Store with the BB-based reward
-            our_player.ai_model.remember(
-                final_state, Action.CHECK, reward_bb, None, True
-            )
+                for i, (state, action, next_state, _) in enumerate(self.hand_experiences):
+                    # Calculate decayed reward (most recent action gets full reward)
+                    steps_from_end = num_experiences - i - 1
+                    decayed_reward = reward_bb * (decay_factor ** steps_from_end)
+
+                    # Last experience in hand is terminal
+                    is_terminal = (i == num_experiences - 1)
+
+                    # Store the experience with the appropriately attributed reward
+                    our_player.ai_model.remember(
+                        state, action, decayed_reward,
+                        next_state if not is_terminal else None,
+                        is_terminal
+                    )
+
+            # Clear hand experiences for next hand
+            self.hand_experiences = []
 
         won = our_player in winners
         return reward_bb, won
@@ -763,10 +770,12 @@ class RewardBasedTrainer:
                     current, game.action_history[-10:], next_opponent_info, hand_phase=street_idx
                 )
 
-                # Intermediate reward (small shaping rewards)
-                intermediate_reward = 0
+                # DON'T store experience yet - we'll update all experiences with the final reward
+                # Instead, track the experience for later update
+                if not hasattr(self, 'hand_experiences'):
+                    self.hand_experiences = []
 
-                player.ai_model.remember(state, action, intermediate_reward, next_state, False)
+                self.hand_experiences.append((state, action, next_state, False))
 
             # Update tracking
             game.action_history.append(action)
