@@ -946,11 +946,33 @@ class TexasHoldEm:
             self.pot = 0
             return
 
-        # Calculate side pots
+        # Store the actual pot amount to ensure we distribute exactly what's there
+        total_pot_to_distribute = self.pot
+
+        # Calculate side pots based on player contributions
         player_contributions = {}
         for player in self.players:
-            # current_bet represents total contribution to pot this hand
-            player_contributions[player] = player.current_bet
+            # Use total_invested which tracks total contribution across all streets
+            player_contributions[player] = player.total_invested
+
+        # Calculate total contributions to verify against actual pot
+        total_contributions = sum(player_contributions.values())
+
+        # If there's a mismatch, we need to handle it
+        if total_contributions != total_pot_to_distribute:
+            # This can happen due to rounding or blind posting
+            # Adjust the contributions proportionally to match the actual pot
+            if total_contributions > 0:
+                adjustment_ratio = total_pot_to_distribute / total_contributions
+                for player in player_contributions:
+                    player_contributions[player] = int(player_contributions[player] * adjustment_ratio)
+
+            # Handle any remaining chips due to rounding
+            remaining = total_pot_to_distribute - sum(player_contributions.values())
+            if remaining > 0 and active_players:
+                # Add remaining chips to the player with highest contribution
+                max_contributor = max(active_players, key=lambda p: player_contributions[p])
+                player_contributions[max_contributor] += remaining
 
         # Create side pots
         side_pots = []
@@ -1019,6 +1041,14 @@ class TexasHoldEm:
                     if verbose:
                         pot_label = f" (pot #{pot_num})" if len(side_pots) > 1 else ""
                         print(f"    {winner.name} wins ${amount}{pot_label}")
+
+        # Verify we distributed exactly the pot amount
+        total_distributed = sum(pot_size for pot_size, _ in side_pots)
+        if total_distributed != total_pot_to_distribute:
+            print(f"\nWARNING: Pot distribution mismatch!")
+            print(f"  Pot to distribute: ${total_pot_to_distribute}")
+            print(f"  Actually distributed: ${total_distributed}")
+            print(f"  Difference: ${total_pot_to_distribute - total_distributed}")
 
         # Clear the pot
         self.pot = 0
