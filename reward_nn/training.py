@@ -735,7 +735,7 @@ class RewardBasedTrainer:
 
             # Execute action
             old_bet = player.current_bet
-            self.execute_action(game, player, action)
+            self.execute_action(game, player, action, num_players)
 
             # Track if our player went all-in or folded
             if player == game.players[0]:
@@ -805,7 +805,7 @@ class RewardBasedTrainer:
 
         return valid
 
-    def execute_action(self, game, player, action):
+    def execute_action(self, game, player, action, num_players):
         """Execute a player's action"""
         if action == Action.FOLD:
             player.folded = True
