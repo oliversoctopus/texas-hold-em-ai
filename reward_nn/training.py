@@ -858,7 +858,7 @@ class RewardBasedTrainer:
             player.all_in = True
 
     def determine_winners(self, game) -> List[Player]:
-        """Determine the winners of a hand"""
+        """Determine the winners of a hand with proper side pot handling"""
         active_players = [p for p in game.players if not p.folded]
 
         if len(active_players) == 1:
@@ -868,48 +868,79 @@ class RewardBasedTrainer:
             game.pot = 0
             return active_players
 
-        # Evaluate hands
-        player_hands = []
+        # Calculate side pots based on all-in amounts
+        # Track how much each player has contributed to the pot
+        player_contributions = {}
+        for player in game.players:
+            # Track total contribution (current_bet represents total bet this hand)
+            player_contributions[player] = player.current_bet
+
+        # Create side pots
+        side_pots = []
+        remaining_players = active_players.copy()
+
+        while remaining_players:
+            # Find the player with the smallest contribution among remaining players
+            min_contribution = min(player_contributions[p] for p in remaining_players)
+
+            if min_contribution > 0:
+                # Create a side pot for this contribution level
+                pot_size = 0
+                eligible_players = []
+
+                # All players (even folded) contribute to this pot up to min_contribution
+                for player in game.players:
+                    contribution = min(player_contributions[player], min_contribution)
+                    pot_size += contribution
+                    player_contributions[player] -= contribution
+
+                    # Only non-folded players are eligible to win
+                    if not player.folded and contribution > 0:
+                        eligible_players.append(player)
+
+                if pot_size > 0 and eligible_players:
+                    side_pots.append((pot_size, eligible_players))
+
+            # Remove players who have no more contributions
+            remaining_players = [p for p in remaining_players if player_contributions[p] > 0]
+
+        # Now evaluate hands and distribute each side pot
+        player_hands = {}
         for player in active_players:
             if player.hand:
                 all_cards = player.hand + game.community_cards
                 hand_value = evaluate_hand(all_cards)
-                player_hands.append((player, hand_value))
+                player_hands[player] = hand_value
+            else:
+                player_hands[player] = 0
 
-        if not player_hands:
-            # If no valid hands, split pot equally among active players
-            if active_players and game.pot > 0:
-                split_pot = game.pot // len(active_players)
-                remainder = game.pot % len(active_players)
-                for i, player in enumerate(active_players):
+        # Distribute each side pot to the best hand(s) among eligible players
+        total_winners = set()
+
+        for pot_size, eligible_players in side_pots:
+            # Find best hand among eligible players
+            eligible_hands = [(p, player_hands[p]) for p in eligible_players if p in player_hands]
+
+            if eligible_hands:
+                best_value = max(hand[1] for hand in eligible_hands)
+                pot_winners = [p for p, value in eligible_hands if value == best_value]
+
+                # Distribute this side pot
+                split_pot = pot_size // len(pot_winners)
+                remainder = pot_size % len(pot_winners)
+
+                for i, winner in enumerate(pot_winners):
                     if i < remainder:
-                        player.chips += split_pot + 1
+                        winner.chips += split_pot + 1
                     else:
-                        player.chips += split_pot
-                game.pot = 0
-            return active_players
+                        winner.chips += split_pot
+                    total_winners.add(winner)
 
-        # Find best hand
-        best_value = max(hand[1] for hand in player_hands)
-        winners = [player for player, value in player_hands if value == best_value]
+        # Clear the pot after distribution
+        game.pot = 0
 
-        # Distribute pot
-        if winners:
-            # Use integer division to avoid fractional chips
-            split_pot = game.pot // len(winners)
-            remainder = game.pot % len(winners)
-
-            for i, winner in enumerate(winners):
-                # Give the remainder chips to first winners
-                if i < remainder:
-                    winner.chips += split_pot + 1
-                else:
-                    winner.chips += split_pot
-
-            # Clear the pot after distribution
-            game.pot = 0
-
-        return winners
+        # Return all winners (from any side pot)
+        return list(total_winners) if total_winners else active_players[:1]
 
     def _choose_opponent(self, hand_idx: int) -> str:
         """Choose opponent type based on curriculum"""

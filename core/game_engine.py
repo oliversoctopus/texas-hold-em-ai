@@ -933,22 +933,92 @@ class TexasHoldEm:
         return [p for p, s in scores if s == max_score]
     
     def distribute_pot(self, winners, verbose=True):
-        """Distribute pot to winners"""
-        if not winners:
+        """Distribute pot to winners with proper side pot handling"""
+        active_players = [p for p in self.players if not p.folded]
+
+        # If only one active player, they get everything
+        if len(active_players) == 1:
+            winner = active_players[0]
+            winner.chips += self.pot
+            if verbose:
+                print(f"\n--- Pot Distribution ---")
+                print(f"{winner.name} wins ${self.pot}")
+            self.pot = 0
             return
 
-        split = self.pot // len(winners)
-        remainder = self.pot % len(winners)
+        # Calculate side pots
+        player_contributions = {}
+        for player in self.players:
+            # current_bet represents total contribution to pot this hand
+            player_contributions[player] = player.current_bet
+
+        # Create side pots
+        side_pots = []
+        remaining_players = active_players.copy()
+
+        while remaining_players:
+            # Find minimum contribution among remaining players
+            min_contribution = min(player_contributions[p] for p in remaining_players)
+
+            if min_contribution > 0:
+                # Create a side pot
+                pot_size = 0
+                eligible_players = []
+
+                # All players contribute to this pot up to min_contribution
+                for player in self.players:
+                    contribution = min(player_contributions[player], min_contribution)
+                    pot_size += contribution
+                    player_contributions[player] -= contribution
+
+                    # Only non-folded players are eligible to win
+                    if not player.folded and contribution > 0:
+                        eligible_players.append(player)
+
+                if pot_size > 0 and eligible_players:
+                    side_pots.append((pot_size, eligible_players))
+
+            # Remove players with no more contributions
+            remaining_players = [p for p in remaining_players if player_contributions[p] > 0]
+
+        # Evaluate hands
+        player_hands = {}
+        for player in active_players:
+            if player.hand:
+                all_cards = player.hand + self.community_cards
+                hand_value = evaluate_hand(all_cards)
+                player_hands[player] = hand_value
 
         if verbose:
             print(f"\n--- Pot Distribution ---")
-            print(f"Total pot: ${self.pot}")
+            if len(side_pots) > 1:
+                print(f"Multiple pots due to all-ins:")
 
-        for i, winner in enumerate(winners):
-            amount = split + (1 if i < remainder else 0)
-            winner.chips += amount
-            if verbose:
-                print(f"{winner.name} wins ${amount}")
+        # Distribute each side pot
+        pot_num = 0
+        for pot_size, eligible_players in side_pots:
+            pot_num += 1
 
-        # CRITICAL FIX: Reset pot to 0 after distribution
+            # Find best hand among eligible players for this pot
+            eligible_hands = [(p, player_hands.get(p, 0)) for p in eligible_players]
+
+            if eligible_hands:
+                best_value = max(hand[1] for hand in eligible_hands)
+                pot_winners = [p for p, value in eligible_hands if value == best_value]
+
+                # Distribute this side pot
+                split_pot = pot_size // len(pot_winners)
+                remainder = pot_size % len(pot_winners)
+
+                if verbose and len(side_pots) > 1:
+                    print(f"  Pot #{pot_num}: ${pot_size}")
+
+                for i, winner in enumerate(pot_winners):
+                    amount = split_pot + (1 if i < remainder else 0)
+                    winner.chips += amount
+                    if verbose:
+                        pot_label = f" (pot #{pot_num})" if len(side_pots) > 1 else ""
+                        print(f"    {winner.name} wins ${amount}{pot_label}")
+
+        # Clear the pot
         self.pot = 0
