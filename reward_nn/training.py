@@ -23,16 +23,17 @@ class RewardBasedTrainer:
     def __init__(self, ai_model: RewardBasedAI, num_players: int = 2,
                  big_blind: int = 20, starting_chips: int = 1000,
                  variable_stacks: bool = True, min_stack_bb: int = 20, max_stack_bb: int = 200,
-                 progressive_stacks: bool = True):
+                 progressive_stacks: bool = True, variable_player_count: bool = True):
         """Initialize trainer"""
         self.ai_model = ai_model
-        self.num_players = num_players
+        self.max_players = num_players  # Maximum number of players
         self.big_blind = big_blind
         self.starting_chips = starting_chips
         self.variable_stacks = variable_stacks
         self.min_stack_bb = min_stack_bb  # Minimum stack in big blinds
         self.max_stack_bb = max_stack_bb  # Maximum stack in big blinds
         self.progressive_stacks = progressive_stacks  # Gradually increase variation
+        self.variable_player_count = variable_player_count  # Train with varying player counts
         self.total_training_hands = None  # Will be set during train()
 
         # Training statistics
@@ -85,11 +86,15 @@ class RewardBasedTrainer:
 
         if verbose:
             print(f"Training Reward-Based AI for {num_hands} hands...")
-            print(f"Players: {self.num_players}, Big Blind: ${self.big_blind}")
+            if self.variable_player_count and self.max_players > 2:
+                print(f"Players: 2-{self.max_players} (variable), Big Blind: ${self.big_blind}")
+                print(f"  Training includes scenarios with fewer players (tournament-style)")
+            else:
+                print(f"Players: {self.max_players} (fixed), Big Blind: ${self.big_blind}")
             if self.variable_stacks:
                 if self.progressive_stacks:
                     print(f"Progressive Stacks: Starting uniform, increasing variation over time")
-                    print(f"Total chips fixed at {1000 * self.num_players} for stability")
+                    print(f"Total chips scale with active players (1000 × num_players)")
                 else:
                     print(f"Variable Stacks: {self.min_stack_bb}-{self.max_stack_bb} BBs")
             else:
@@ -208,14 +213,19 @@ class RewardBasedTrainer:
                 recent_loss = np.mean(self.ai_model.loss_history[-10:])
                 print(f"Recent Avg Loss: {recent_loss:.4f}")
 
-    def _get_stack_distribution(self, hand_idx: int) -> List[int]:
-        """Get stack distribution for the current hand with progressive variation"""
+    def _get_stack_distribution(self, hand_idx: int, num_players: int) -> List[int]:
+        """Get stack distribution for the current hand with progressive variation
+
+        Args:
+            hand_idx: Current hand index for progression calculation
+            num_players: Actual number of players in this hand (may be less than max)
+        """
         if not self.variable_stacks:
             # Fixed stacks for all players
-            return [self.starting_chips] * self.num_players
+            return [self.starting_chips] * num_players
 
-        # Total chips scales with number of players
-        total_chips = 1000 * self.num_players
+        # Total chips scales with actual number of players in this hand
+        total_chips = 1000 * num_players
 
         # Calculate progress for progressive variation
         if self.progressive_stacks and self.total_training_hands:
@@ -230,7 +240,7 @@ class RewardBasedTrainer:
             progress = 1.0  # Full variation immediately if not progressive
 
         # For 2 players, use the original logic
-        if self.num_players == 2:
+        if num_players == 2:
             # Determine stack scenario based on hand index
             scenario_cycle = hand_idx % 100  # Cycle through scenarios
 
@@ -266,17 +276,17 @@ class RewardBasedTrainer:
 
         # For 3+ players, implement progressive variation
         else:
-            avg_stack = total_chips // self.num_players
+            avg_stack = total_chips // num_players
             min_stack = int(avg_stack * 0.2)  # Minimum 20% of average
 
             # Maximum possible stack (leaving minimum for others)
-            theoretical_max = total_chips - (min_stack * (self.num_players - 1))
+            theoretical_max = total_chips - (min_stack * (num_players - 1))
 
             scenario_cycle = hand_idx % 100  # Cycle through scenarios
 
             if scenario_cycle < 25 or progress < 0.1:
                 # Uniform stacks early in training
-                return [avg_stack] * self.num_players
+                return [avg_stack] * num_players
 
             elif scenario_cycle < 50:
                 # Chip leader vs others scenario with exponentially decreasing probability for extreme stacks
@@ -307,7 +317,7 @@ class RewardBasedTrainer:
 
                 # Distribute remaining chips among other players
                 remaining_chips = total_chips - leader_chips
-                remaining_players = self.num_players - 1
+                remaining_players = num_players - 1
 
                 for i in range(remaining_players):
                     if i == remaining_players - 1:
@@ -340,7 +350,7 @@ class RewardBasedTrainer:
                     stacks.append(short_stack)
                 else:
                     # Normal short stack scenario
-                    num_short = min(2, self.num_players - 1)
+                    num_short = min(2, num_players - 1)
                     for _ in range(num_short):
                         short_stack = int(avg_stack * (0.3 + 0.3 * (1 - progress)))  # 30-60% of average
                         short_stack = max(min_stack, short_stack)
@@ -348,7 +358,7 @@ class RewardBasedTrainer:
 
                 # Distribute remaining chips among other players
                 remaining_chips = total_chips - sum(stacks)
-                remaining_players = self.num_players - num_short
+                remaining_players = num_players - num_short
 
                 for i in range(remaining_players):
                     if i == remaining_players - 1:
@@ -375,29 +385,29 @@ class RewardBasedTrainer:
                     extreme_multiplier = 3.0 + random.random() * (theoretical_max / avg_stack - 3.0) * 0.7
                     extreme_stack = int(avg_stack * extreme_multiplier)
                     extreme_stack = min(extreme_stack, theoretical_max)
-                    extreme_position = random.randint(0, self.num_players - 1)
+                    extreme_position = random.randint(0, num_players - 1)
 
-                    for i in range(self.num_players):
+                    for i in range(num_players):
                         if i == extreme_position:
                             stacks.append(extreme_stack)
                             remaining_chips -= extreme_stack
-                        elif i == self.num_players - 1:
+                        elif i == num_players - 1:
                             stacks.append(remaining_chips)
                         else:
-                            avg_remaining = remaining_chips / (self.num_players - len(stacks))
+                            avg_remaining = remaining_chips / (num_players - len(stacks))
                             stack = int(avg_remaining * random.uniform(0.5, 1.5))
-                            stack = max(min_stack, min(stack, remaining_chips - min_stack * (self.num_players - len(stacks) - 1)))
+                            stack = max(min_stack, min(stack, remaining_chips - min_stack * (num_players - len(stacks) - 1)))
                             stacks.append(stack)
                             remaining_chips -= stack
                 else:
                     # Normal random distribution
-                    for i in range(self.num_players):
-                        if i == self.num_players - 1:
+                    for i in range(num_players):
+                        if i == num_players - 1:
                             # Last player gets whatever is left
                             stacks.append(remaining_chips)
                         else:
                             # Random stack with progressive variation
-                            avg_remaining = remaining_chips / (self.num_players - i)
+                            avg_remaining = remaining_chips / (num_players - i)
                             variation_range = 0.6 * progress  # Up to 60% variation when fully progressed
 
                             stack = int(avg_remaining * random.uniform(1 - variation_range, 1 + variation_range))
@@ -406,7 +416,7 @@ class RewardBasedTrainer:
                                 stack = int(stack * random.uniform(1.0, 1.5))
 
                             # Ensure we don't violate minimum constraints
-                            max_allowed = remaining_chips - min_stack * (self.num_players - i - 1)
+                            max_allowed = remaining_chips - min_stack * (num_players - i - 1)
                             stack = max(min_stack, min(stack, max_allowed))
 
                             stacks.append(stack)
@@ -414,20 +424,78 @@ class RewardBasedTrainer:
 
                 return stacks
 
+    def _get_num_players_for_hand(self, hand_idx: int) -> int:
+        """Determine the number of players for this training hand
+
+        Simulates tournament-style progression where players get eliminated
+        """
+        if not self.variable_player_count or self.max_players <= 2:
+            return self.max_players
+
+        # Calculate training progress
+        progress = min(1.0, hand_idx / max(1000, self.total_training_hands or 1000))
+
+        # Distribution of player counts (weighted by likelihood)
+        # Most hands should be at max players, but include smaller games
+        rand = random.random()
+
+        if self.max_players == 3:
+            if rand < 0.7:
+                return 3  # 70% full table
+            else:
+                return 2  # 30% heads-up
+
+        elif self.max_players == 4:
+            if rand < 0.6:
+                return 4  # 60% full table
+            elif rand < 0.85:
+                return 3  # 25% three-handed
+            else:
+                return 2  # 15% heads-up
+
+        elif self.max_players == 5:
+            if rand < 0.5:
+                return 5  # 50% full table
+            elif rand < 0.75:
+                return 4  # 25% four-handed
+            elif rand < 0.9:
+                return 3  # 15% three-handed
+            else:
+                return 2  # 10% heads-up
+
+        else:  # 6 players
+            if rand < 0.45:
+                return 6  # 45% full table
+            elif rand < 0.7:
+                return 5  # 25% five-handed
+            elif rand < 0.85:
+                return 4  # 15% four-handed
+            elif rand < 0.95:
+                return 3  # 10% three-handed
+            else:
+                return 2  # 5% heads-up
+
+        # Increase heads-up frequency slightly as training progresses
+        # (simulating getting deeper in tournaments)
+        if progress > 0.7 and rand < 0.1:
+            return 2  # Extra 10% chance for heads-up in late training
+
     def simulate_hand(self, hand_idx: int) -> Tuple[float, bool]:
         """Simulate a single hand and return reward in big blinds"""
-        game = TexasHoldEmTraining(num_players=self.num_players)
+        # Determine actual number of players for this hand
+        num_players = self._get_num_players_for_hand(hand_idx)
+        game = TexasHoldEmTraining(num_players=num_players)
 
         # Track all-ins and folds for penalty/bonus
         our_all_in_count = 0
         our_player_folded = False
 
         # Get stack distribution for this hand
-        stack_distribution = self._get_stack_distribution(hand_idx)
+        stack_distribution = self._get_stack_distribution(hand_idx, num_players)
 
         # Setup players first, before reset
         players = []
-        for i in range(self.num_players):
+        for i in range(num_players):
             player_chips = stack_distribution[i]
             player = Player(f"Player_{i}", player_chips, is_ai=True)
 
@@ -477,8 +545,8 @@ class RewardBasedTrainer:
             player.reset_hand()
 
         # Post blinds
-        sb_pos = (game.dealer_position + 1) % self.num_players
-        bb_pos = (game.dealer_position + 2) % self.num_players
+        sb_pos = (game.dealer_position + 1) % num_players
+        bb_pos = (game.dealer_position + 2) % num_players
         sb_bet = game.players[sb_pos].bet(self.big_blind // 2)
         bb_bet = game.players[bb_pos].bet(self.big_blind)
         game.pot = sb_bet + bb_bet  # Start with clean integer pot
@@ -498,7 +566,7 @@ class RewardBasedTrainer:
                 game.community_cards.append(game.deck.draw())
 
             # Betting round
-            all_ins_this_round, folded_this_round = self.betting_round(game, street_idx)
+            all_ins_this_round, folded_this_round = self.betting_round(game, street_idx, num_players)
             our_all_in_count += all_ins_this_round
             if folded_this_round:
                 our_player_folded = True  # Track if folded in ANY round
@@ -597,7 +665,7 @@ class RewardBasedTrainer:
             # Create final state
             final_state = our_player.ai_model.get_state_features(
                 our_player.hand, game.community_cards, game.pot, 0,
-                our_player.chips, 0, self.num_players, 1, 0,
+                our_player.chips, 0, num_players, 1, 0,
                 game.action_history, final_opponent_info, hand_phase=3
             )
 
@@ -609,7 +677,7 @@ class RewardBasedTrainer:
         won = our_player in winners
         return reward_bb, won
 
-    def betting_round(self, game: TexasHoldEmTraining, street_idx: int):
+    def betting_round(self, game: TexasHoldEmTraining, street_idx: int, num_players: int):
         """Execute a betting round, returns (all-ins, folded) for our player"""
         if not game.players or len(game.players) == 0:
             return 0, False
@@ -652,7 +720,7 @@ class RewardBasedTrainer:
 
             state = player.ai_model.get_state_features(
                 player.hand, game.community_cards, game.pot, game.current_bet,
-                player.chips, player.current_bet, self.num_players,
+                player.chips, player.current_bet, num_players,
                 sum(1 for p in game.players if not p.folded),
                 current, game.action_history[-10:], opponent_info, hand_phase=street_idx
             )
@@ -690,7 +758,7 @@ class RewardBasedTrainer:
 
                 next_state = player.ai_model.get_state_features(
                     player.hand, game.community_cards, game.pot, game.current_bet,
-                    player.chips, player.current_bet, self.num_players,
+                    player.chips, player.current_bet, num_players,
                     sum(1 for p in game.players if not p.folded),
                     current, game.action_history[-10:], next_opponent_info, hand_phase=street_idx
                 )
@@ -758,7 +826,7 @@ class RewardBasedTrainer:
                 # DQN model needs state tensor
                 state = player.ai_model.get_state_features(
                     player.hand, game.community_cards, game.pot, game.current_bet,
-                    player.chips, player.current_bet, self.num_players,
+                    player.chips, player.current_bet, num_players,
                     sum(1 for p in game.players if not p.folded),
                     0, game.action_history[-10:], [], hand_phase=0
                 )

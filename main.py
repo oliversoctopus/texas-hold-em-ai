@@ -506,16 +506,29 @@ def main():
             print("\nProgressive stacks enabled:")
             print(f"  - Starting with uniform stacks ({1000}x{num_players} = {1000*num_players} total chips)")
             print("  - Gradually increasing variation over 75% of training")
-            print(f"  - Total chips fixed at {1000*num_players} for stability")
+            print(f"  - Total chips scale with active players (1000 × num_players)")
             if num_players > 2:
                 print("  - Scenarios: chip leader, short stacks, and random variations")
         else:
             print("\nUsing random stack variation throughout training")
 
+        # Ask about variable player count (tournament-style)
+        use_variable_players = False
+        if num_players > 2:
+            variable_players = input("\nTrain with variable player counts? (simulates tournament progression) (y/n, default: y): ")
+            use_variable_players = variable_players.lower() != 'n'  # Default to yes
+
+            if use_variable_players:
+                print(f"\nVariable player training enabled:")
+                print(f"  - Training includes games from 2 to {num_players} players")
+                print(f"  - Simulates tournament-style player elimination")
+                print(f"  - AI learns to adapt strategy as field shrinks")
+
         trainer = RewardBasedTrainer(
             reward_ai,
             num_players=num_players,
-            progressive_stacks=use_progressive
+            progressive_stacks=use_progressive,
+            variable_player_count=use_variable_players
         )
 
         trainer.train(
