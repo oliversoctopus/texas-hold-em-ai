@@ -579,7 +579,7 @@ class RewardBasedTrainer:
         # Determine winner and calculate reward
         winners = self.determine_winners(game)
         our_player = game.players[0]
-
+        won = our_player in winners
 
         # Calculate reward in big blinds
         final_chips = our_player.chips
@@ -644,8 +644,6 @@ class RewardBasedTrainer:
                 fold_penalty = self.fold_penalty * excess_folding * 4  # Scale penalty
                 reward_bb += fold_penalty  # Negative penalty reduces reward
 
-        won = our_player in winners
-
         # Update tracking (add all-in and fold counts to parent method's tracking)
         if hasattr(self, '_current_training_all_ins'):
             self._current_training_all_ins += our_all_in_count
@@ -681,7 +679,6 @@ class RewardBasedTrainer:
             # Clear hand experiences for next hand
             self.hand_experiences = []
 
-        won = our_player in winners
         return reward_bb, won
 
     def betting_round(self, game: TexasHoldEmTraining, street_idx: int, num_players: int):
