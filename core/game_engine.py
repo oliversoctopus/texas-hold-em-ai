@@ -970,32 +970,36 @@ class TexasHoldEm:
 
         # Create side pots
         side_pots = []
-        remaining_players = active_players.copy()
 
-        while remaining_players:
-            # Find minimum contribution among remaining players
-            min_contribution = min(player_contributions[p] for p in remaining_players)
+        # Keep processing until all contributions are accounted for
+        while sum(player_contributions.values()) > 0:
+            # Find minimum non-zero contribution from ANY player (including folded)
+            min_contribution = float('inf')
+            for player in self.players:
+                if player_contributions[player] > 0:
+                    min_contribution = min(min_contribution, player_contributions[player])
 
-            if min_contribution > 0:
-                # Create a side pot
-                pot_size = 0
-                eligible_players = []
+            # If no contributions left, we're done
+            if min_contribution == float('inf'):
+                break
 
-                # All players contribute to this pot up to min_contribution
-                for player in self.players:
+            # Create a side pot for this contribution level
+            pot_size = 0
+            eligible_players = []
+
+            # All players contribute to this pot up to min_contribution
+            for player in self.players:
+                if player_contributions[player] > 0:
                     contribution = min(player_contributions[player], min_contribution)
                     pot_size += contribution
                     player_contributions[player] -= contribution
 
                     # Only non-folded players are eligible to win
-                    if not player.folded and contribution > 0:
+                    if not player.folded:
                         eligible_players.append(player)
 
-                if pot_size > 0 and eligible_players:
-                    side_pots.append((pot_size, eligible_players))
-
-            # Remove players with no more contributions
-            remaining_players = [p for p in remaining_players if player_contributions[p] > 0]
+            if pot_size > 0 and eligible_players:
+                side_pots.append((pot_size, eligible_players))
 
         # Evaluate hands
         player_hands = {}
@@ -1043,6 +1047,9 @@ class TexasHoldEm:
             print(f"  Pot to distribute: ${total_pot_to_distribute}")
             print(f"  Actually distributed: ${total_distributed}")
             print(f"  Difference: ${total_pot_to_distribute - total_distributed}")
+            print(f"  Side pots created: {len(side_pots)}")
+            for i, (size, players) in enumerate(side_pots):
+                print(f"    Pot {i+1}: ${size} for {[p.name for p in players]}")
 
         # Clear the pot
         self.pot = 0
