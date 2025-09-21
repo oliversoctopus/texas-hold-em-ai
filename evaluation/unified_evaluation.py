@@ -311,6 +311,29 @@ class UnifiedEvaluator:
         max_hands = 200
         test_actions = []
 
+        # Store reference to test player
+        test_player = game.players[test_position]
+
+        # Monkey-patch the test player's AI model to track actions
+        original_choose_action = test_player.ai_model.choose_action
+
+        def tracked_choose_action(state, valid_actions, **kwargs):
+            # Call original method
+            action = original_choose_action(state, valid_actions, **kwargs)
+            # Track the action
+            if hasattr(action, 'name'):
+                action_name = action.name.upper()
+            else:
+                action_name = str(action).upper()
+
+            if action_name in ['FOLD', 'CHECK', 'CALL', 'RAISE', 'ALL_IN']:
+                test_actions.append(action_name)
+
+            return action
+
+        # Replace with tracked version
+        test_player.ai_model.choose_action = tracked_choose_action
+
         while hands_played < max_hands:
             try:
                 # Check for game end conditions
@@ -325,35 +348,16 @@ class UnifiedEvaluator:
                     if max_chips > 0.90 * total_chips and len(active_players) > 1:
                         break
 
-                # Track action history before hand
-                actions_before = len(game.action_history) if hasattr(game, 'action_history') else 0
-
                 # Play a hand
                 game.play_hand(verbose=False)
                 hands_played += 1
 
-                # Extract actions taken by test player this hand
-                if hasattr(game, 'action_history') and len(game.action_history) > actions_before:
-                    # Analyze new actions
-                    new_actions = game.action_history[actions_before:]
-
-                    # Track which player took each action based on position
-                    current_player_idx = 0
-                    for action in new_actions:
-                        # Simple heuristic: actions cycle through active players
-                        # This is approximate but good enough for statistics
-                        active_count = len([p for p in game.players if p.chips > 0 and not p.folded])
-                        if active_count > 0:
-                            if current_player_idx % active_count == test_position % active_count:
-                                # This action was likely from our test player
-                                action_name = action.name.upper()
-                                if action_name in ['FOLD', 'CHECK', 'CALL', 'RAISE', 'ALL_IN']:
-                                    test_actions.append(action_name)
-                            current_player_idx += 1
-
             except Exception as e:
                 # Game ended with error
                 break
+
+        # Restore original method
+        test_player.ai_model.choose_action = original_choose_action
 
         # Find winner
         max_chips = max(player.chips for player in game.players)
@@ -368,7 +372,6 @@ class UnifiedEvaluator:
             print(f"  Player chips: {[p.chips for p in game.players]}")
             print(f"  Hands played: {hands_played}")
             winner_idx = -1
-
 
         return winner_idx, test_actions
 
