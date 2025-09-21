@@ -998,8 +998,21 @@ class TexasHoldEm:
                     if not player.folded:
                         eligible_players.append(player)
 
-            if pot_size > 0 and eligible_players:
-                side_pots.append((pot_size, eligible_players))
+            if pot_size > 0:
+                if eligible_players:
+                    # Normal case: create a side pot with eligible players
+                    side_pots.append((pot_size, eligible_players))
+                else:
+                    # All contributors folded - add their money to the next pot
+                    # or create a pot for remaining active players
+                    if side_pots and side_pots[-1][1]:
+                        # Add to the previous pot (if it exists and has players)
+                        prev_size, prev_players = side_pots[-1]
+                        side_pots[-1] = (prev_size + pot_size, prev_players)
+                    elif active_players:
+                        # Create a new pot for all active players
+                        side_pots.append((pot_size, active_players))
+                    # If no active players at all, this shouldn't happen in a valid game
 
         # Evaluate hands
         player_hands = {}
