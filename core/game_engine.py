@@ -244,9 +244,10 @@ class TexasHoldEmTraining:
             # Validate that checking is actually allowed
             call_amount = self.current_bet - player.current_bet
             if call_amount > 0:
-                # Invalid check - convert to fold
-                player.folded = True
-                return  # Exit early since we converted to fold
+                # Invalid check - this should never happen with proper validation
+                print(f"\nERROR: {player.name} attempted invalid CHECK with ${call_amount} to call!")
+                print(f"  This indicates a bug in the AI's action selection.")
+                raise RuntimeError(f"Invalid action: CHECK when there's ${call_amount} to call")
             pass
         elif action == Action.CALL:
             amount = player.bet(self.current_bet - player.current_bet)
@@ -307,25 +308,11 @@ class TexasHoldEmTraining:
                     player.current_bet, min_raise
                 )
             else:
-                # Fallback - use variable sizing based on pot
-                max_raise = player.chips - call_amount
-                if max_raise > min_raise:
-                    # Choose from different strategic sizes
-                    options = []
-                    if min_raise <= max_raise:
-                        options.append(min_raise)
-                    if pot_size * 0.33 <= max_raise and pot_size * 0.33 > min_raise:
-                        options.append(int(pot_size * 0.33))
-                    if pot_size * 0.5 <= max_raise and pot_size * 0.5 > min_raise:
-                        options.append(int(pot_size * 0.5))
-                    if pot_size * 0.75 <= max_raise and pot_size * 0.75 > min_raise:
-                        options.append(int(pot_size * 0.75))
-                    if options:
-                        raise_amount = random.choice(options)
-                    else:
-                        raise_amount = min_raise
-                else:
-                    raise_amount = min_raise
+                # Fallback for AI without get_raise_size method in training mode
+                print(f"\nWARNING: AI model for '{player.name}' doesn't have get_raise_size method!")
+                print(f"  Using default raise sizing (minimum raise).")
+                print(f"  Consider implementing get_raise_size() in your AI model.")
+                raise_amount = min_raise
             
             # Execute the raise
             old_bet = self.current_bet
@@ -593,8 +580,12 @@ class TexasHoldEm:
                     # Store current street for execute_action
                     self.current_street = street_idx
                 else:
-                    # Random AI (no model)
-                    action = random.choice(valid_actions)
+                    # No AI model defined - this is a bug!
+                    print(f"\nERROR: Player '{player.name}' has is_ai=True but no ai_model defined!")
+                    print(f"  This is likely a bug in how the player was created.")
+                    print(f"  The game cannot continue without a proper AI model.")
+                    print(f"  Please ensure player.ai_model is set to a valid AI instance.")
+                    raise RuntimeError(f"Player {player.name} has no AI model defined")
             else:
                 # Human player
                 action = self.get_human_action(player, valid_actions)
@@ -683,12 +674,11 @@ class TexasHoldEm:
             # Validate that checking is actually allowed
             call_amount = self.current_bet - player.current_bet
             if call_amount > 0:
-                # Invalid check - player must call, raise, or fold when there's a bet
-                # Convert invalid check to fold
-                player.folded = True
-                if verbose:
-                    print(f"WARNING: {player.name} attempted invalid check with ${call_amount} to call - folding instead")
-                return  # Exit early since we converted to fold
+                # Invalid check - this should never happen with proper validation
+                print(f"\nERROR: {player.name} attempted invalid CHECK with ${call_amount} to call!")
+                print(f"  This indicates a bug in the AI's action selection.")
+                print(f"  Valid actions should have been: {[a.name for a in self.get_valid_actions(player)]}")
+                raise RuntimeError(f"Invalid action: CHECK when there's ${call_amount} to call")
             if verbose:
                 print(f"{player.name} checks")
         elif action == Action.CALL:
@@ -759,18 +749,11 @@ class TexasHoldEm:
                         player.current_bet, min_raise
                     )
                 else:
-                    # Fallback for untrained AI - simple strategy
-                    max_raise = player.chips - call_amount
-                    # Random AI chooses between different sizes
-                    if max_raise > min_raise:
-                        options = [min_raise]
-                        if pot_size * 0.5 <= max_raise:
-                            options.append(int(pot_size * 0.5))
-                        if pot_size * 0.75 <= max_raise:
-                            options.append(int(pot_size * 0.75))
-                        raise_amount = random.choice(options)
-                    else:
-                        raise_amount = min_raise
+                    # Fallback for AI without get_raise_size method
+                    print(f"\nWARNING: AI model for '{player.name}' doesn't have get_raise_size method!")
+                    print(f"  Using default raise sizing (minimum raise).")
+                    print(f"  Consider implementing get_raise_size() in your AI model.")
+                    raise_amount = min_raise
             
             # Execute the raise
             call_amount = self.current_bet - player.current_bet
